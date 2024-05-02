@@ -1,2 +1,1 @@
-# Engineering
-Computers Science Fundamentals
+# Collection of Computers Science Fundamentals
