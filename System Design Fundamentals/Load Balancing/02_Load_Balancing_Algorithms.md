@@ -23,7 +23,7 @@ Cons:
 Example: A website with three web servers receives requests in the order A, B, C, A, B, C, and so on, distributing the load evenly among the servers.
 
 <p>
-  <img src="https://github.com/Hemantchaurasiya/Engineering/blob/High_Level_System_Design/images/1_Round_Robin_Load_Balancing_Algorithm.gif" />
+  <img src="https://github.com/Hemantchaurasiya/Engineering/blob/High_Level_System_Design/images/1_Round_Robin_Load_Balancing_Algorithm.gif" height="250" />
 </p>
 
 ### 2. Least Connections
@@ -42,7 +42,7 @@ Cons:
 Example: An email service receives requests from users. The load balancer directs new requests to the server with the fewest active connections, ensuring that servers with heavier workloads are not overwhelmed.
 
 <p>
-  <img src="https://github.com/Hemantchaurasiya/Engineering/blob/High_Level_System_Design/images/2_Least_Connections_Load_Balancing_Algorithm.gif" />
+  <img src="https://github.com/Hemantchaurasiya/Engineering/blob/High_Level_System_Design/images/2_Least_Connections_Load_Balancing_Algorithm.gif" height="250" />
 </p>
 
 ### 3. Weighted Round Robin
@@ -61,7 +61,7 @@ Cons:
 Example: A content delivery network has three servers with varying capacities. The load balancer assigns weights of 3, 2, and 1 to these servers, respectively, distributing requests in a 3:2:1 ratio.
 
 <p>
-  <img src="https://github.com/Hemantchaurasiya/Engineering/blob/High_Level_System_Design/images/3_Weighted_Round_Robin_Load_Balancing_Algorithm.gif" />
+  <img src="https://github.com/Hemantchaurasiya/Engineering/blob/High_Level_System_Design/images/3_Weighted_Round_Robin_Load_Balancing_Algorithm.gif" height="250"/>
 </p>
 
 ### 4. Weighted Least Connections
@@ -80,7 +80,7 @@ Cons:
 Example: An e-commerce website uses three servers with different capacities and assigned weights. The load balancer directs new requests to the server with the lowest ratio of active connections to weight, ensuring an efficient distribution of load.
 
 <p>
-  <img src="https://github.com/Hemantchaurasiya/Engineering/blob/High_Level_System_Design/images/4_Weighted_Least_Connections_Load_Balancing_Algorithm.gif" />
+  <img src="https://github.com/Hemantchaurasiya/Engineering/blob/High_Level_System_Design/images/4_Weighted_Least_Connections_Load_Balancing_Algorithm.gif" height="250" />
 </p>
 
 ### 5. IP Hash
@@ -99,7 +99,7 @@ Cons:
 Example: An online multiplayer game uses the IP Hash algorithm to ensure that all requests from a specific player are directed to the same server, maintaining a continuous connection for a smooth gaming experience.
 
 <p>
-  <img src="https://github.com/Hemantchaurasiya/Engineering/blob/High_Level_System_Design/images/5_IP_Hash_Load_Balancing_Algorithm.gif" />
+  <img src="https://github.com/Hemantchaurasiya/Engineering/blob/High_Level_System_Design/images/5_IP_Hash_Load_Balancing_Algorithm.gif" height="250"/>
 </p>
 
 ### 6. Least Response Time
@@ -118,7 +118,7 @@ Cons:
 Example: A video streaming service uses the Least Response Time algorithm to direct users to the server with the fastest response time, ensuring that videos start quickly and minimize buffering times.
 
 <p>
-  <img src="https://github.com/Hemantchaurasiya/Engineering/blob/High_Level_System_Design/images/6_Least_Response_Time_Load_Balancing_Algorithm.gif" />
+  <img src="https://github.com/Hemantchaurasiya/Engineering/blob/High_Level_System_Design/images/6_Least_Response_Time_Load_Balancing_Algorithm.gif" height="250"/>
 </p>
 
 ### 7. Random
@@ -138,7 +138,7 @@ Cons:
 Example: A static content delivery network uses the Random algorithm to distribute requests for images, JavaScript files, and CSS stylesheets among multiple servers. This ensures an even distribution of load and reduces the chances of overloading any single server.
 
 <p>
-  <img src="https://github.com/Hemantchaurasiya/Engineering/blob/High_Level_System_Design/images/7_Random_Load_Balancing_Algorithm.gif" />
+  <img src="https://github.com/Hemantchaurasiya/Engineering/blob/High_Level_System_Design/images/7_Random_Load_Balancing_Algorithm.gif" height="250"/>
 </p>
 
 ### 8. Least Bandwidth
@@ -157,7 +157,7 @@ Cons:
 Example: A file hosting service uses the Least Bandwidth algorithm to direct users to the server with the lowest bandwidth usage, ensuring that servers with high traffic are not overwhelmed and that file downloads are fast and reliable.
 
 <p>
-  <img src="https://github.com/Hemantchaurasiya/Engineering/blob/High_Level_System_Design/images/8_Least_Bandwidth_Load_Balancing_Algorithm.gif" />
+  <img src="https://github.com/Hemantchaurasiya/Engineering/blob/High_Level_System_Design/images/8_Least_Bandwidth_Load_Balancing_Algorithm.gif" height="250"/>
 </p>
 
 ### 9. Custom Load
