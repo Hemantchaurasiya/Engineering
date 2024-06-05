@@ -4,7 +4,7 @@ Load balancing is a crucial component of System Design, as it helps distribute i
 Typically a load balancer sits between the client and the server accepting incoming network and application traffic and distributing the traffic across multiple backend servers using various algorithms. By balancing application requests across multiple servers, a load balancer reduces the load on individual servers and prevents any one server from becoming a single point of failure, thus improving overall application availability and responsiveness.
 
 <p>
-  <img src="https://github.com/Hemantchaurasiya/Engineering/blob/High_Level_System_Design/images/1_Load_Balencer.webp" />
+  <img src="https://github.com/Hemantchaurasiya/Engineering/blob/High_Level_System_Design/images/1_Load_Balencer.webp" height="300"/>
 </p>
 
 To utilize full scalability and redundancy, we can try to balance the load at each layer of the system. We can add LBs at three places:
