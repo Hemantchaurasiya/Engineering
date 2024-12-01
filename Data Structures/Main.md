@@ -1,0 +1,11 @@
+## Array:
+- Kadane’s Algorithm
+- Two Pointer
+- Fast and Slow Pointers
+- Sliding Window
+- Prefix Sum
+- Intervals
+- Binary Search
+- Hashing
+- K-way Merge
+- Topological sort
