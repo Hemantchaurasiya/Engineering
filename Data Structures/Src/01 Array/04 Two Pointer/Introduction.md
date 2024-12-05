@@ -122,3 +122,183 @@ public static int removeDuplicates(int[] nums) {
 - Focus on edge cases like empty arrays, duplicates, and out-of-bound conditions.
 - Optimize time and space complexity through efficient pointer movement.
 
+------------------------------------------------------------------------------------------------------------------------
+# Two Pointer Techniques (Types of two pointer)
+
+Two-pointer techniques are efficient methods for solving array and string problems. This document provides an overview of the types, their use cases, and example problems with Java implementations.
+
+---
+
+## **1. Opposite Ends Approach**
+
+### **Description**
+- Two pointers start at the opposite ends of an array or string and move toward each other.
+
+### **When to Use**
+- Symmetrical problems, such as comparing elements at both ends of the array.
+- Suitable for palindrome checks or two-sum problems in sorted arrays.
+
+### **Example Problem**: Checking if a string is a palindrome
+```java
+public class PalindromeCheck {
+    public static boolean isPalindrome(String s) {
+        int left = 0, right = s.length() - 1;
+        while (left < right) {
+            if (s.charAt(left) != s.charAt(right)) {
+                return false;
+            }
+            left++;
+            right--;
+        }
+        return true;
+    }
+
+    public static void main(String[] args) {
+        System.out.println(isPalindrome("madam")); // true
+        System.out.println(isPalindrome("hello")); // false
+    }
+}
+```
+
+### **Other Problems**
+- Two Sum in a sorted array.
+- Container with Most Water.
+
+---
+
+## **2. Same Direction Approach**
+
+### **Description**
+- Both pointers start at the same position and move in the same direction.
+
+### **When to Use**
+- Problems requiring linear scans with pointer updates.
+- Useful for processing unique or sequential data.
+
+### **Example Problem**: Removing duplicates from a sorted array
+```java
+public class RemoveDuplicates {
+    public static int removeDuplicates(int[] nums) {
+        int uniqueIndex = 1; // Pointer for the position to replace.
+        for (int i = 1; i < nums.length; i++) {
+            if (nums[i] != nums[i - 1]) {
+                nums[uniqueIndex] = nums[i];
+                uniqueIndex++;
+            }
+        }
+        return uniqueIndex;
+    }
+
+    public static void main(String[] args) {
+        int[] nums = {1, 1, 2, 3, 3};
+        int length = removeDuplicates(nums);
+        for (int i = 0; i < length; i++) {
+            System.out.print(nums[i] + " ");
+        }
+    }
+}
+```
+
+### **Other Problems**
+- Merging two sorted arrays.
+- Partitioning arrays by condition.
+
+---
+
+## **3. Sliding Window Technique**
+
+### **Description**
+- Two pointers define the start and end of a window that slides over the array.
+
+### **When to Use**
+- Problems involving subarrays, substrings, or ranges.
+- Ideal for problems with fixed or variable-sized windows.
+
+### **Example Problem**: Maximum sum subarray of a fixed size
+```java
+public class MaxSumSubarray {
+    public static int maxSumSubarray(int[] nums, int k) {
+        int maxSum = 0, windowSum = 0;
+        for (int i = 0; i < nums.length; i++) {
+            windowSum += nums[i];
+            if (i >= k - 1) {
+                maxSum = Math.max(maxSum, windowSum);
+                windowSum -= nums[i - (k - 1)];
+            }
+        }
+        return maxSum;
+    }
+
+    public static void main(String[] args) {
+        int[] nums = {2, 1, 5, 1, 3, 2};
+        int k = 3;
+        System.out.println(maxSumSubarray(nums, k)); // 9
+    }
+}
+```
+
+### **Other Problems**
+- Longest substring without repeating characters.
+- Smallest subarray with a given sum.
+
+---
+
+## **4. Dynamic Pointers**
+
+### **Description**
+- Pointers adjust dynamically based on conditions or constraints.
+
+### **When to Use**
+- Partitioning problems or dynamic pointer movements.
+- Suitable for array rearrangements or partition-based algorithms.
+
+### **Example Problem**: Partitioning an array around a pivot
+```java
+import java.util.Arrays;
+
+public class PartitionArray {
+    public static void partition(int[] nums, int pivot) {
+        int left = 0, right = nums.length - 1;
+        while (left <= right) {
+            if (nums[left] < pivot) {
+                left++;
+            } else if (nums[right] >= pivot) {
+                right--;
+            } else {
+                // Swap elements
+                int temp = nums[left];
+                nums[left] = nums[right];
+                nums[right] = temp;
+                left++;
+                right--;
+            }
+        }
+    }
+
+    public static void main(String[] args) {
+        int[] nums = {5, 2, 9, 1, 5, 6};
+        partition(nums, 5);
+        System.out.println(Arrays.toString(nums)); // [2, 1, 5, 5, 9, 6]
+    }
+}
+```
+
+### **Other Problems**
+- Dutch National Flag problem.
+- Quicksort partitioning.
+
+---
+
+## **Summary**
+| Technique              | When to Use                                        | Example Problems                                 |
+|------------------------|----------------------------------------------------|------------------------------------------------|
+| **Opposite Ends**      | Symmetry in the problem.                           | Palindrome check, Two Sum in sorted array.     |
+| **Same Direction**     | Sequential processing in one pass.                 | Remove duplicates, Merge sorted arrays.        |
+| **Sliding Window**     | Problems with subarray or substring properties.    | Max sum subarray, Longest substring problems.  |
+| **Dynamic Pointers**   | Partitioning or conditionally adjusting pointers.  | Partition arrays, Dutch National Flag.         |
+
+---
+Mastering these patterns will make solving array- and string-based problems much easier!
+
+
+
