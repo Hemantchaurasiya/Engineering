@@ -1,17 +1,67 @@
-Another good resource to find all tree concepts at one spot : <a href=  "https://leetcode.com/discuss/general-discussion/937307/iterative-recursive-dfs-bfs-tree-traversal-in-pre-post-levelorder-views">Treeeees 🌳</a>
+### Hashmaps
 
-# Tree : :triangular_flag_on_post:
+<table id = "hashmap" class="SectionTable display" >
+	<thead> 
+		<th>Problem Name</th>
+	</thead>
+	<tbody>
+		<tr>
+    		<td>
+				<a href="">Introduction</a>
+			</td>
+		</tr>
+		<tr>
+    		<td>
+				<a href="">First Non-repeating Character</a>
+			</td>
+		</tr>
+		<tr>
+    		<td>
+				<a href="">Largest Unique Number</a>
+			</td>
+		</tr>
+		<tr>
+    		<td>
+				<a href="">Longest Palindrome</a>
+			</td>
+		</tr>
+		<tr>
+    		<td>
+				<a href="">Maximum Number of Balloons</a>
+			</td>
+		</tr>
+		<tr>
+    		<td>
+				<a href="">Ransom Note</a>
+			</td>
+		</tr>
+	</tbody>
+</table>
 
-<h1>Questions</h1>
-<table id = "example" class="SectionTable display" >
-		<thead>
-      <th>Problem Name</th>
-		</thead>
-		<tbody>
-			<tr>
-        <td>
-					<a href="">Diagonal Tree Traversal</a>
-				</td>
-			</tr>
-		</tbody>
+<table id = "hashmap" class="SectionTable display" >
+	<thead> 
+		<th>Problem Name</th>
+	</thead>
+	<tbody>
+		<tr>
+    		<td>
+				<a href="">Introduction</a>
+			</td>
+		</tr>
+		<tr>
+    		<td>
+				<a href=""></a>
+			</td>
+		</tr>
+		<tr>
+    		<td>
+				<a href=""></a>
+			</td>
+		</tr>
+		<tr>
+    		<td>
+				<a href=""></a>
+			</td>
+		</tr>
+	</tbody>
 </table>
