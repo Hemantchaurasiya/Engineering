@@ -1,7 +1,7 @@
 ### Array And String
-<a href="">Merge Sorted Array</a>
-<a href="">Remove Element</a>
-<a href="">Remove Duplicates from Sorted Array</a>
+- <a href="">Merge Sorted Array</a>
+- <a href="">Remove Element</a>
+- <a href="">Remove Duplicates from Sorted Array</a>
 <a href="">Remove Duplicates from Sorted Array II</a>
 <a href="">Majority Element</a>
 <a href="">Rotate Array</a>
