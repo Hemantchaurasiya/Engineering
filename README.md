@@ -216,42 +216,67 @@ Computers Science Fundamentals
     - [Game of Life](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/10%20Matrix/Programs/Game%20of%20Life.md)
 
 ## Linked List
+- Problems
+	- [Delete Node in a Linked List](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/02%20Linked%20List/Programs/Delete%20Node%20in%20a%20Linked%20List.md)
+	- [Merge Two Sorted Linked List](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/02%20Linked%20List/Programs/Merge%20Two%20Sorted%20Linked%20List.md)
+	- [Remove duplicates from sorted list](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/02%20Linked%20List/Programs/Remove%20duplicates%20from%20sorted%20list.md)
+	- [Intersection of two linked list](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/02%20Linked%20List/Programs/Intersection%20of%20two%20linked%20list.md)
+	- [Swapping Nodes in a Linked List](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/02%20Linked%20List/Programs/Swapping%20Nodes%20in%20a%20Linked%20List.md)
+	- [Odd Even Linked List](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/02%20Linked%20List/Programs/Odd%20Even%20Linked%20List.md)
+	- [Remove nth node from Linked List](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/02%20Linked%20List/Programs/Remove%20nth%20node%20from%20Linked%20List.md)
+	- [Add Two Numbers](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/02%20Linked%20List/Programs/Add%20Two%20Numbers.md)
+	- [Swap Nodes in Pairs](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/02%20Linked%20List/Programs/Swap%20Nodes%20in%20Pairs.md)
+	- [Split Linked List in Parts](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/02%20Linked%20List/Programs/Split%20Linked%20List%20in%20Parts.md)
+	- [Insertion sort on Linked List](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/02%20Linked%20List/Programs/Insertion%20sort%20on%20Linked%20List.md)
+	- [Merge sort on Linked List](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/02%20Linked%20List/Programs/Merge%20sort%20on%20Linked%20List.md)
+	- Copy list with random pointers
+	- [Remove zero sum from consecutive nodes from linked list](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/02%20Linked%20List/Programs/Remove%20zero%20sum%20from%20consecutive%20nodes%20from%20linked%20list.md)
+	- [Merge k sorted Linked List](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/02%20Linked%20List/Programs/Merge%20k%20sorted%20Linked%20List.md)
+	- [Reverse nodes in k group](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/02%20Linked%20List/Programs/Reverse%20nodes%20in%20k%20group.md)
+	- [Doubly Linked List](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/02%20Linked%20List/Programs/Doubly%20Linked%20List.md)
+	- Adding a node at the front, at the end, after a node or before a node
+	- Deleting a node from the front, from the end, after a node or before a node
+	- [Circular Doubly Linked List](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/02%20Linked%20List/Programs/Circular%20Doubly%20Linked%20List.md)
+	- Adding a node at the front, at the end, after a node or before a node
+	- Deleting a node from the front, from the end, after a node or before a node
+	- [LRU Cache](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/02%20Linked%20List/Programs/LRU%20Cache.md)
+	- [LFU Cache](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/02%20Linked%20List/Programs/LFU%20Cache.md)
+
 - Fast & Slow pointers
-    - LinkedList Cycle
+    - [LinkedList Cycle](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/02%20Linked%20List/Programs/Linked%20List%20Cycle.md)
     - Start of LinkedList Cycle
     - Happy Number
-    - Middle of the LinkedList
-    - Palindrome LinkedList
+    - [Middle of the Linked List](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/02%20Linked%20List/Programs/Middle%20of%20the%20Linked%20List.md)
+    - [Palindrome LinkedList](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/02%20Linked%20List/Programs/Palindrome%20Linked%20List.md)
     - Rearrange a LinkedList
 
 - In-place Reversal of a LinkedList
-    - Reverse a LinkedList
-    - Reverse a Sub-list
-    - Reverse every K-element Sub-list
-    - Reverse alternating K-element Sub-list
-    - Rotate a LinkedList
+    - [Reverse a Linked List](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/02%20Linked%20List/Programs/Reverse%20a%20Linked%20List.md)
+    - [Reverse a Sub-list](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/02%20Linked%20List/Programs/Reverse%20a%20Sub-list.md)
+    - [Reverse every K-element Sub-list](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/02%20Linked%20List/Programs/Reverse%20every%20K-element%20Sub-list.md)
+    - [Reverse alternating K-element Sub-list](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/02%20Linked%20List/Programs/Reverse%20alternating%20K-element%20Sub-list.md)
+    - [Rotate a LinkedList](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/02%20Linked%20List/Programs/Rotate%20a%20LinkedList.md)
 
 ## Stack
 - Stack
-    - Balanced Parentheses
-    - Reverse a String
-    - Decimal to Binary Conversion
-    - Next Greater Element
-    - Sorting a Stack
-    - Simplify Path
+    - [Balanced Parentheses](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/03%20Stack/Programs/Balanced%20Parentheses.md)
+    - [Reverse a String](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/03%20Stack/Programs/Reverse%20a%20String.md)
+    - [Decimal to Binary Conversion](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/03%20Stack/Programs/Decimal%20to%20Binary%20Conversion.md)
+    - [Sorting a Stack](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/03%20Stack/Programs/Sorting%20a%20Stack.md)
+    - [Simplify Path](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/03%20Stack/Programs/Simplify%20Path.md)
 
 - Monotonic Stack
-    - Next Greater Element
-    - Daily Temperatures
-    - Remove Nodes From Linked List
-    - Remove All Adjacent Duplicates In String
-    - Remove All Adjacent Duplicates in String II
-    - Remove K Digits
+    - [Next Greater Element](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/03%20Stack/Programs/Next%20Greater%20Element.md)
+    - [Daily Temperatures](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/03%20Stack/Programs/Daily%20Temperatures.md)
+    - [Remove Nodes From Linked List](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/03%20Stack/Programs/Remove%20Nodes%20From%20Linked%20List.md)
+    - [Remove All Adjacent Duplicates In String](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/03%20Stack/Programs/Remove%20All%20Adjacent%20Duplicates%20In%20String.md)
+    - [Remove All Adjacent Duplicates in String II](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/03%20Stack/Programs/Remove%20All%20Adjacent%20Duplicates%20In%20String%20II.md)
+    - [Remove K Digits](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/03%20Stack/Programs/Remove%20K%20Digits.md)
 
-    - Sum of Subarray Minimums
+    - [Sum of Subarray Minimums](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/03%20Stack/Programs/Sum%20of%20Subarray%20Minimums.md)
     - Beautiful Towers II
     - Trapping Rain Water
-    - Largest Rectangle in Histogram
+    - [Largest Rectangle in Histogram](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/03%20Stack/Programs/Largest%20Rectangle%20In%20Histogram.md)
 
 ## Queue
 - Implementation Problems
