@@ -1,0 +1,6 @@
+### K-way merge
+- [Merge K Sorted Lists](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/09%20K-Way%20Merge/Programs/Merge%20K%20Sorted%20Lists.md)
+- [Kth Smallest Number in M Sorted Lists](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/09%20K-Way%20Merge/Programs/Kth%20Smallest%20Number%20in%20M%20Sorted%20Lists.md)
+- [Kth Smallest Number in a Sorted Matrix](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/09%20K-Way%20Merge/Programs/Kth%20Smallest%20Number%20in%20a%20Sorted%20Matrix.md)
+- [Smallest Number Range](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/09%20K-Way%20Merge/Programs/Smallest%20Number%20Range.md)
+- [K Pairs with Largest Sums](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/09%20K-Way%20Merge/Programs/K%20Pairs%20with%20Largest%20Sums.md)

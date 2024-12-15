@@ -1,3 +1,19 @@
+### Prifix Sum
+- Prifix Sum
+    - [Range Sum Query - Immutable](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/07%20Prefix%20Sum/Programs/Range%20Sum%20Query%20-%20Immutable.md)
+    - [Range Sum Query 2D - Immutable](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/07%20Prefix%20Sum/Programs/Range%20Sum%20Query%202D%20-%20Immutable.md)
+    - [Product of Array Except Self](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/07%20Prefix%20Sum/Programs/Product%20of%20Array%20Except%20Self.md)
+    - [Product of the Last K Numbers](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/07%20Prefix%20Sum/Programs/Product%20of%20the%20Last%20K%20Numbers.md)
+    - [Increment Submatrices by One](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/07%20Prefix%20Sum/Programs/Increment%20Submatrices%20by%20One.md)
+
+- Line Sweep
+    - [Points That Intersect With Cards](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/07%20Prefix%20Sum/Programs/Points%20That%20Intersect%20With%20Cars.md)
+    - [Car Pooling](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/07%20Prefix%20Sum/Programs/Car%20Pooling.md)
+    - [My Calendar II](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/07%20Prefix%20Sum/Programs/My%20Calendar%20II.md)
+    - [Number of Flowers in Full Bloom](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/07%20Prefix%20Sum/Programs/Number%20of%20Flowers%20in%20Full%20Bloom.md)
+
+
+
 # Prefix Sum Notes
 
 ## 1. What is Prefix Sum?

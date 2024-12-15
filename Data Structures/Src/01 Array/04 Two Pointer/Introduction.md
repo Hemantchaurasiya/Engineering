@@ -1,3 +1,37 @@
+### Two Pointer
+- Two Pointer on Arrays
+    - [Valid Palindrome](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/04%20Two%20Pointer/Programs/Valid%20Palindrome.md)
+    - [Valid Palindrome II](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/04%20Two%20Pointer/Programs/Valid%20Palindrome%20II.md)
+    - Is Subsequence
+    - [Two Sum II - Input Array Is Sorted](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/04%20Two%20Pointer/Programs/Two%20Sum%20II%20Input%20Array%20Is%20Sorted.md)
+    - [3Sum](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/04%20Two%20Pointer/Programs/3Sum.md)
+    - [Move Zeroes](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/04%20Two%20Pointer/Programs/Move%20Zeroes.md)
+    - [Trapping Rain Water](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/04%20Two%20Pointer/Programs/Trapping%20Rain%20Water.md)
+    - [Container With Most Water](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/04%20Two%20Pointer/Programs/Container%20With%20Most%20Water.md)
+
+    - Two Sum
+    - [Remove Duplicates](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/04%20Two%20Pointer/Programs/Remove%20Duplicates.md)
+    - Squaring a Sorted Array
+    - [Triplet Sum Close to Target](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/04%20Two%20Pointer/Programs/Triplet%20Sum%20Close%20to%20Target%20.md)
+    - [Triplets with Smaller Sum](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/04%20Two%20Pointer/Programs/Triplets%20with%20Smaller%20Sum.md)
+    - Subarrays with Product Less than a Target
+    - Dutch National Flag Problem
+    - Quadruple Sum to Target
+    - [Comparing Strings containing Backspaces](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/04%20Two%20Pointer/Programs/Comparing%20Strings%20containing%20Backspaces.md)
+    - [Minimum Window Sort](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/04%20Two%20Pointer/Programs/Minimum%20Window%20Sort.md)
+
+    - [Sort Array by Parity](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/04%20Two%20Pointer/Programs/Sort%20Array%20by%20Parity.md)
+    - Sort Array by Parity II
+    - [Rotate Array](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/04%20Two%20Pointer/Programs/Rotate%20Array.md)
+    - Partition Array According to Given Pivot
+    - Sort Colors
+    - Next Permutation
+    
+
+- Two Pointer on Strings
+    - DI String Match
+    - Reverse Words in a String
+
 # Two Pointer Technique
 
 ## 1. What is the Two Pointer Technique?

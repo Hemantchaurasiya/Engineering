@@ -1,3 +1,28 @@
+### Hashing
+- Hashing
+    - [Ransom Note](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/01%20Hashmaps/Programs/Ransom%20Note.md)
+    - [Isomorphic Strings](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/01%20Hashmaps/Programs/Isomorphic%20Strings.md)
+    - [Word Pattern](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/01%20Hashmaps/Programs/Word%20Pattern.md)
+    - [Valid Anagram](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/01%20Hashmaps/Programs/Valid%20Anagram.md)
+    - [Group Anagrams](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/01%20Hashmaps/Programs/Group%20Anagrams.md)
+    - [Two Sum](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/01%20Hashmaps/Programs/Two%20Sum.md)
+    - [Happy Number](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/01%20Hashmaps/Programs/Happy%20Number.md)
+    - [Contains Duplicate II](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/01%20Hashmaps/Programs/Contains%20Duplicate%20II.md)
+    - [Longest Consecutive Sequence](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/01%20Hashmaps/Programs/Longest%20Consecutive%20Sequence.md)
+    - [Majority Element](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/01%20Hashmaps/Programs/Majority%20Element.md)
+    - [Majority Element II](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/01%20Hashmaps/Programs/Majority%20Element%20II.md)
+    - [First Non-repeating Character](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/01%20Hashmaps/Programs/First%20Non-repeating%20Character.md)
+    - [Largest Unique Number](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/01%20Hashmaps/Programs/Largest%20Unique%20Number.md)
+    - [Longest Palindrome](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/01%20Hashmaps/Programs/Longest%20Palindrome.md)
+    - [Maximum Number of Balloons](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/01%20Hashmaps/Programs/Maximum%20Number%20of%20Balloons.md)
+
+- Hashing With Prefix Sum
+    - [Subarray Sum Equals K](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/01%20Hashmaps/Programs/Subarray%20Sum%20Equals%20K.md)
+    - [Subarray Sum Divisible by K](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/01%20Hashmaps/Programs/Subarray%20Sum%20Divisible%20by%20K.md)
+    - [Count Number of Nice Subarrays](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/01%20Hashmaps/Programs/Count%20Number%20of%20Nice%20Subarrays.md)
+    - [Number of Submatrices That Sum to Target](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/01%20Hashmaps/Programs/Number%20of%20Submatrices%20That%20Sum%20to%20Target.md)
+
+
 # Hashing and HashMap: Comprehensive Notes
 
 ## 1. What is Hashing or HashMap?
@@ -125,4 +150,3 @@ public class GroupAnagrams {
 - Be familiar with Java-specific HashMap methods like `put()`, `get()`, `containsKey()`, and `computeIfAbsent()`.
 
 ---
-

@@ -1,3 +1,92 @@
+### Binary Search
+- Problems
+    - Binary Search
+    - Search Insert Position
+    - Find Smallest Letter Greater Than Target
+    - Count Negative Numbers in a Sorted Matrix
+    - Find First and Last Position of Element in Sorted Array
+    - Find Right Interval
+    - Time Based Key-Value Store
+    - Snapshot Array
+- Rotated Array
+    - Search in Rotated Sorted Array
+    - Find Minimum in Rotated Sorted Array
+    - Find Minimum in Rotated Sorted Array II
+- Standard Search
+    - Guess Number Higher or Lower
+    - First Bad Version
+    - Search a 2D Matrix
+    - Search in a Sorted Array of Unknown Size
+    - Find the Index of the Large Integer
+
+- Math
+    - Valid Perfect Square
+    - Sqrt(x)
+    - Arranging Coins
+- Tricky Invariant
+    - Kth Missing Positive Number
+    - H-Index II
+    - Single Element in a Sorted Array
+    - Peak Index in a Mountain Array
+    - Find K Closest Elements
+    - Median of Two Sorted Arrays
+    - Two Sum Less Than K
+    - Valid Triangle Number
+    - Successful Pairs of Spells and Potions
+    - Number of Subsequences That Satisfy the Given Sum Condition
+    - Random Pick with Weight
+    - Longest Increasing Subsequence
+    - Russian Doll Envelopes
+
+- Upper Bound and Lower Bound
+    - [Find First and Last Position of Element in Sorted Array](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/02%20Binary%20Search/Programs/Find%20First%20and%20Last%20Position%20of%20Element%20in%20Sorted%20Array.md)
+
+- Search on Matrix
+    - [Search a 2D Matrix](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/02%20Binary%20Search/Programs/Search%20a%202D%20Matrix.md)
+    - Median in a Row-wise Sorted Matrix
+
+- Missing and Repeating Number
+    - [Single Element in a Sorted Array](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/02%20Binary%20Search/Programs/Single%20Element%20in%20a%20Sorted%20Array.md)
+
+- Binary Search on Semi-Sorted Space
+    - [Find Peak Element](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/02%20Binary%20Search/Programs/Find%20Peak%20Element.md)
+    - [Find Minimum in Rotated Sorted Array](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/02%20Binary%20Search/Programs/Find%20Minimum%20in%20Rotated%20Sorted%20Array.md)
+    - [Peak Index in a Mountain Array](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/02%20Binary%20Search/Programs/Peak%20Index%20in%20a%20Mountain%20Array.md)
+    - [Search in Rotated Sorted Array](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/02%20Binary%20Search/Programs/Search%20in%20Rotated%20Sorted%20Array.md)
+    - [Find Minimum in Rotated Sorted Array II](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/02%20Binary%20Search/Programs/Find%20Minimum%20in%20Rotated%20Sorted%20Array%20II.md)
+
+- Binary Search On Answer
+    - [Sqrt(x)](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/02%20Binary%20Search/Programs/Sqrt(x).md)
+    - [Capacity to Ship Packages](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/02%20Binary%20Search/Programs/Capacity%20to%20Ship%20Packages.md)
+    - [Capacity to Ship Packages Within D Days](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/02%20Binary%20Search/Programs/Capacity%20To%20Ship%20Packages%20Within%20D%20Days.md)
+    - [Koko Eating Bananas](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/02%20Binary%20Search/Programs/Koko%20Eating%20Bananas.md)
+    - [Minimum Number of Days to Make M Bouquets](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/02%20Binary%20Search/Programs/Minimum%20Number%20of%20Days%20to%20Make%20m%20Bouquets.md)
+    - Maximum Value at a Given Index in a Bounded Array
+    - Split Array Largest Sum
+    - [Median of Two Sorted Arrays](https://github.com/Hemantchaurasiya/Engineering/blob/Coding_Patterns/Data%20Structures/Src/01%20Array/02%20Binary%20Search/Programs/Median%20of%20Two%20Sorted%20Arrays.md)
+
+- Minmax Problems
+    - Maximum Tastiness of Candy Basket
+    - Maximize the Minimum Powered City
+
+- Finding the K-th Element
+    - Kth Smallest Number in Multiplication Table
+    - Kth Smallest Product of Two Sorted Arrays
+
+- Modified Binary Search
+    - Order-agnostic Binary Search
+    - Ceiling of a Number
+    - Next Letter
+    - Number Range
+    - Search in a Sorted Infinite Array
+    - Minimum Difference Element
+    - Bitonic Array Maximum
+    - Search Bitonic Array
+    - Search in Rotated Array
+    - Rotation Count
+    - Capacity To Ship Packages Within D Days
+
+
 # Binary Search Notes
 
 ## 1. What is Binary Search?
