@@ -1,0 +1,18 @@
+### Introduction to CAP Theorem
+The CAP theorem, also known as Brewer's theorem, is a fundamental concept in distributed systems design. It was introduced by Eric Brewer in 2000. The CAP theorem provides a framework for understanding the trade-offs between three essential properties of distributed systems: consistency, availability, and partition tolerance.
+
+### Background and history
+Before the introduction of the CAP theorem, distributed systems were primarily designed with a focus on consistency and availability, often ignoring partition tolerance. However, as distributed systems grew in scale and complexity, it became evident that addressing network partitions was crucial for ensuring reliable and fault-tolerant operation.
+
+### Overview of the CAP theorem
+The CAP theorem states that it is impossible for a distributed system to simultaneously provide all three properties: consistency, availability, and partition tolerance. In other words, a distributed system can only guarantee two out of these three properties at any given time. The theorem highlights the inherent trade-offs that system designers must consider when building distributed systems.
+
+- Consistency (C): In the context of CAP, consistency means that all nodes see the same data at the same time. More formally, every read receives the result of the most recent write – no matter which replica node it connects to. This is often referred to as strong consistency or linearizability. (Note: This is different from the “consistency” in ACID databases, which refers to validity of transactions. Here, we mean consistency across distributed replicas.) If you write some data, a consistent system ensures any subsequent read (on any node) will return that data.
+
+- Availability (A): Availability means the system always responds to requests. Every request to a non-failing node must result in some response (either the latest data or possibly stale data, but it cannot ignore you or error out). In practice, this means even if parts of the system go down, the service as a whole is still accessible. An available system can tolerate node failures – clients can always read or write something.
+
+- Partition Tolerance (P): Partition tolerance means the system continues to operate despite network partitions or communication failures between nodes. A partition is a break in connectivity that splits the network into disjoint parts. In a partition-tolerant system, even if nodes are cut off from each other due to network issues, each part can keep working (possibly in a degraded mode). Essentially, the system can lose arbitrarily many messages between nodes (or even whole nodes) and still keep going. In modern distributed systems, network partitions will happen (due to outages, delays, etc.), so tolerance to partitions is a must.
+
+CAP Theorem
+CAP Theorem
+CAP theorem tells us that when a network partition occurs, a system must choose between being Consistent or being Available – it cannot be both. If there is no partition, you can have both C and A. But you must design assuming a partition will eventually happen. At that point, you sacrifice either consistency or availability. This is the crux of CAP: in the presence of a partition, you can only guarantee two of the three properties (since partition tolerance is usually non-negotiable, the real choice is between C and A). We’ll explore this trade-off and what it means for real systems in the next sections.
