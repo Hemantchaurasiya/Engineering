@@ -1,5 +1,3 @@
-# Untitled
-
 ### **1. Choosing the Right Collection**
 
 **Scenario**: You're building an **e-commerce application** where products need to be added to a shopping cart. Items may be added multiple times, but the order of addition matters.
@@ -198,20 +196,6 @@ How would you enforce immutability on the collection? Which methods or wrappers 
 
 ---
 
-Would you like me to group these questions by **topic areas** (e.g., Maps, Sets, Queues, performance, concurrency) or go ahead and prepare **sample answers/solutions** as well?
-
-4o
-
-### You said:
-
-More
-
-### ChatGPT said:
-
-Absolutely! Here’s a **third set** of **real-world, scenario-based Java Collections Framework interview questions** to further test practical and design-level thinking:
-
----
-
 ### **21. Event Scheduling System**
 
 **Scenario**: You are building an **event scheduler** where you need to schedule tasks based on their **execution time** and always run the earliest event first.
@@ -309,3 +293,101 @@ How would you use a collection to group these anagrams efficiently?
 **Question**:
 
 Which collection would you use to manage client sessions efficiently for fast lookup, addition, and removal?
+
+### **31. Order History with Paging**
+
+**Scenario**: You're developing an **e-commerce backend** to fetch paginated **order history** per user, ordered from latest to oldest.
+
+**Question**:
+
+Which collection would you use to maintain this order and support pagination? How would you implement it efficiently?
+
+---
+
+### **32. Bulk Data Processing**
+
+**Scenario**: You receive **10 million product records** and need to find duplicate SKUs and group products by category.
+
+**Question**:
+
+Which collection(s) would you use to ensure memory efficiency and fast duplicate/group detection?
+
+---
+
+### **33. Most Recently Active Users**
+
+**Scenario**: In a social media app, you want to maintain a **live feed of the 100 most recently active users**.
+
+**Question**:
+
+Which collection(s) would you choose to ensure fast insertion, removal, and ordering based on activity timestamp?
+
+---
+
+### **34. Detect Circular References**
+
+**Scenario**: You’re parsing a **dependency tree of services**, and you need to detect **cyclic dependencies** between services.
+
+**Question**:
+
+Which collection(s) will help you track visited nodes and the recursion path effectively?
+
+---
+
+### **35. Efficient Autocomplete System**
+
+**Scenario**: You are implementing an **autocomplete feature** for search where typing “ap” should instantly return words like “apple”, “application”, etc.
+
+**Question**:
+
+Which collection(s) would help you implement this efficiently? How would you structure the data?
+
+---
+
+### **36. Data Consistency Between Services**
+
+**Scenario**: You have two microservices: one holds **product inventory**, another holds **pricing data**. You want to detect mismatches between them.
+
+**Question**:
+
+How would you use collections to compare large datasets and find mismatched product IDs or values?
+
+---
+
+### **37. Real-Time Chat Rooms**
+
+**Scenario**: In a chat application, each user can belong to **multiple chat rooms**, and each room has **multiple users**.
+
+**Question**:
+
+How would you model this many-to-many relationship using Java Collections?
+
+---
+
+### **38. Maintaining a Priority Queue with Updates**
+
+**Scenario**: You're building a **stock trading platform**, and need to maintain a queue of open orders sorted by price and time, but orders can also be updated or canceled.
+
+**Question**:
+
+How would you maintain such a queue efficiently and support updates?
+
+---
+
+### **39. Tree-Like Data with Fast Lookup**
+
+**Scenario**: You’re creating a **file system structure**, where folders and files can be nested arbitrarily, but you also need to look up a file quickly by its path.
+
+**Question**:
+
+How would you model this using collections?
+
+---
+
+### **40. Tag-Based Content Filtering**
+
+**Scenario**: You're developing a **blog platform**, where users can search for articles by selecting **multiple tags** (e.g., "java", "performance", "collections").
+
+**Question**:
+
+How would you model and store the tag-to-article mapping for fast filtering?
