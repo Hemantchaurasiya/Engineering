@@ -70,8 +70,6 @@ Java provides two ways to create threads:
 ### **1️⃣ Extending the `Thread` Class**
 
 ```java
-java
-CopyEdit
 class MyThread extends Thread {
     public void run() {
         System.out.println("Thread is running: " + Thread.currentThread().getName());
@@ -96,8 +94,6 @@ Use when **overriding the `Thread` class** and need more control over thread beh
 ### **2️⃣ Implementing the `Runnable` Interface**
 
 ```java
-java
-CopyEdit
 class MyRunnable implements Runnable {
     public void run() {
         System.out.println("Runnable thread is running: " + Thread.currentThread().getName());
@@ -137,8 +133,6 @@ Threads in Java have **five lifecycle states**:
 ### **📌 Example of Lifecycle**
 
 ```java
-java
-CopyEdit
 class LifecycleExample extends Thread {
     public void run() {
         try {
@@ -197,8 +191,6 @@ Java provides two ways to create threads:
 - Call `start()` to begin execution.
 
 ```java
-java
-CopyEdit
 class MyThread extends Thread {
     public void run() {
         System.out.println("Thread running: " + Thread.currentThread().getName());
@@ -226,8 +218,6 @@ public class ThreadExample {
 - More flexible because it allows extending another class.
 
 ```java
-java
-CopyEdit
 class MyRunnable implements Runnable {
     public void run() {
         System.out.println("Runnable thread running: " + Thread.currentThread().getName());
@@ -259,8 +249,6 @@ Threads can be managed using **start()**, **sleep()**, **yield()**, and **join()
 - Creates a separate thread of execution.
 
 ```java
-java
-CopyEdit
 class StartExample extends Thread {
     public void run() {
         System.out.println("Thread started: " + Thread.currentThread().getName());
@@ -287,8 +275,6 @@ public class StartDemo {
 - Causes the thread to **pause** for a given duration.
 
 ```java
-java
-CopyEdit
 class SleepExample extends Thread {
     public void run() {
         try {
@@ -321,8 +307,6 @@ public class SleepDemo {
 - Suggests the **CPU should execute another thread**.
 
 ```java
-java
-CopyEdit
 class YieldExample extends Thread {
     public void run() {
         for (int i = 0; i < 3; i++) {
@@ -357,8 +341,6 @@ public class YieldDemo {
 - Makes the calling thread wait until another thread **finishes execution**.
 
 ```java
-java
-CopyEdit
 class JoinExample extends Thread {
     public void run() {
         for (int i = 0; i < 5; i++) {
@@ -401,8 +383,6 @@ public class JoinDemo {
 - A background thread that **automatically terminates** when all user threads finish.
 
 ```java
-java
-CopyEdit
 class DaemonExample extends Thread {
     public void run() {
         while (true) {
@@ -438,8 +418,6 @@ Threads have **priorities from 1 (MIN_PRIORITY) to 10 (MAX_PRIORITY)**.
 - `Thread.MAX_PRIORITY` = 10
 
 ```java
-java
-CopyEdit
 class PriorityExample extends Thread {
     public void run() {
         System.out.println(Thread.currentThread().getName() + " with priority " + Thread.currentThread().getPriority());
@@ -505,8 +483,6 @@ A **race condition** occurs when multiple threads access and modify shared data 
 ### **Example: Bank Account Withdrawal Without Synchronization**
 
 ```java
-java
-CopyEdit
 class BankAccount {
     private int balance = 100;
 
@@ -556,8 +532,6 @@ The **`synchronized`** keyword ensures that only **one thread** can execute the 
 ### **✅ `synchronized` Method**
 
 ```java
-java
-CopyEdit
 class BankAccount {
     private int balance = 100;
 
@@ -585,8 +559,6 @@ class BankAccount {
 If **only a part** of the method requires synchronization, use a **synchronized block**.
 
 ```java
-java
-CopyEdit
 class BankAccount {
     private int balance = 100;
 
@@ -620,8 +592,6 @@ class BankAccount {
 ### **✅ Example: Multiple Threads on Different Methods**
 
 ```java
-java
-CopyEdit
 class SharedResource {
     public synchronized void methodA() {
         System.out.println(Thread.currentThread().getName() + " is executing methodA");
@@ -658,8 +628,6 @@ public class LockDemo {
 Occurs when **two or more threads wait indefinitely** for locks held by each other.
 
 ```java
-java
-CopyEdit
 class Deadlock {
     private final Object lock1 = new Object();
     private final Object lock2 = new Object();
@@ -712,8 +680,6 @@ public class DeadlockExample {
 ### **✅ Problem: Non-Atomic Operations**
 
 ```java
-java
-CopyEdit
 class Counter {
     private int count = 0;
 
@@ -729,8 +695,6 @@ class Counter {
 ### **✅ Solution: Use `AtomicInteger`**
 
 ```java
-java
-CopyEdit
 import java.util.concurrent.atomic.AtomicInteger;
 
 class Counter {
@@ -756,8 +720,6 @@ class Counter {
 ### **✅ Without `volatile` (Visibility Issue)**
 
 ```java
-java
-CopyEdit
 class VolatileExample {
     private boolean running = true;
 
@@ -771,8 +733,6 @@ class VolatileExample {
 ### **✅ With `volatile`**
 
 ```java
-java
-CopyEdit
 class VolatileExample {
     private volatile boolean running = true;
 
@@ -824,8 +784,6 @@ The **Happens-Before** relationship is a fundamental concept in JMM that ensures
 ### **✅ Example: Happens-Before Using `synchronized`**
 
 ```java
-java
-CopyEdit
 class SharedResource {
     private int count = 0;
 
@@ -873,8 +831,6 @@ public class HappensBeforeDemo {
 ### **✅ `volatile` Ensures Visibility (But Not Atomicity)**
 
 ```java
-java
-CopyEdit
 class VolatileExample {
     private volatile boolean running = true;
 
@@ -894,8 +850,6 @@ class VolatileExample {
 ### **✅ `synchronized` Ensures Visibility and Atomicity**
 
 ```java
-java
-CopyEdit
 class SynchronizedExample {
     private int count = 0;
 
@@ -919,8 +873,6 @@ class SynchronizedExample {
 ### **✅ `final` Guarantees Visibility After Construction**
 
 ```java
-java
-CopyEdit
 class FinalExample {
     private final int value;
 
@@ -973,8 +925,6 @@ Inter-thread communication allows multiple threads to coordinate execution by sh
 ### **✅ Example: Basic Producer-Consumer Using wait() & notify()**
 
 ```java
-java
-CopyEdit
 class SharedResource {
     private int data;
     private boolean available = false;
@@ -1047,8 +997,6 @@ The **Producer-Consumer** problem is a classic synchronization challenge where:
 ### **✅ Modern Approach Using `BlockingQueue`**
 
 ```java
-java
-CopyEdit
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 
@@ -1112,8 +1060,6 @@ A **more flexible alternative** to `wait()/notify()` is **Lock & Condition varia
 ### **✅ Example: Producer-Consumer with Lock & Condition**
 
 ```java
-java
-CopyEdit
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
@@ -1227,8 +1173,6 @@ Java provides advanced synchronization mechanisms beyond `synchronized`, includi
 ### **✅ Code Example: ReentrantLock with Try-Lock**
 
 ```java
-java
-CopyEdit
 import java.util.concurrent.locks.ReentrantLock;
 
 class SharedResource {
@@ -1285,8 +1229,6 @@ public class ReentrantLockExample {
 ### **✅ Code Example: Producer-Consumer Using `Condition`**
 
 ```java
-java
-CopyEdit
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
@@ -1374,8 +1316,6 @@ public class ConditionExample {
 ### **✅ Code Example: Read-Write Lock**
 
 ```java
-java
-CopyEdit
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 class SharedDataRW {
@@ -1443,8 +1383,6 @@ public class ReadWriteLockExample {
 ### **✅ Code Example: StampedLock with Optimistic Read**
 
 ```java
-java
-CopyEdit
 import java.util.concurrent.locks.StampedLock;
 
 class SharedStampedData {
@@ -1527,8 +1465,6 @@ Java provides the **Executors Framework** to efficiently manage and coordinate t
 ### **✅ Code Example: Using `ExecutorService`**
 
 ```java
-java
-CopyEdit
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -1577,8 +1513,6 @@ Java provides different types of thread pools optimized for different scenarios:
 ### **✅ Code Example: FixedThreadPool vs CachedThreadPool**
 
 ```java
-java
-CopyEdit
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -1630,8 +1564,6 @@ public class ThreadPoolExample {
 ### **✅ Code Example: Callable & Future**
 
 ```java
-java
-CopyEdit
 import java.util.concurrent.*;
 
 public class CallableFutureExample {
@@ -1677,8 +1609,6 @@ public class CallableFutureExample {
 ### **✅ Code Example: Using `CompletionService`**
 
 ```java
-java
-CopyEdit
 import java.util.concurrent.*;
 
 public class CompletionServiceExample {
@@ -1758,8 +1688,6 @@ Java provides **two primary approaches** for parallelism:
 ### **✅ Code Example: Sum of an Array using Fork/Join**
 
 ```java
-java
-CopyEdit
 import java.util.concurrent.RecursiveTask;
 import java.util.concurrent.ForkJoinPool;
 
@@ -1826,8 +1754,6 @@ public class ForkJoinExample {
 ### **✅ Code Example: RecursiveAction (No Return)**
 
 ```java
-java
-CopyEdit
 import java.util.concurrent.RecursiveAction;
 import java.util.concurrent.ForkJoinPool;
 
@@ -1884,8 +1810,6 @@ public class RecursiveActionExample {
 ### **✅ Code Example: Parallel Sum**
 
 ```java
-java
-CopyEdit
 import java.util.Arrays;
 import java.util.List;
 
@@ -1922,8 +1846,6 @@ public class ParallelStreamExample {
 ### **✅ Code Example: Comparing Performance**
 
 ```java
-java
-CopyEdit
 import java.util.*;
 import java.util.stream.IntStream;
 
@@ -1995,8 +1917,6 @@ In a **multi-threaded environment**, using standard data structures (e.g., `Hash
 ### **✅ Code Example: Using `ConcurrentHashMap` for Shared Counters**
 
 ```java
-java
-CopyEdit
 import java.util.concurrent.ConcurrentHashMap;
 
 public class ConcurrentHashMapExample {
@@ -2049,8 +1969,6 @@ public class ConcurrentHashMapExample {
 ### **✅ Code Example: Producer-Consumer Using `ConcurrentLinkedQueue`**
 
 ```java
-java
-CopyEdit
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 public class ConcurrentQueueExample {
@@ -2103,8 +2021,6 @@ public class ConcurrentQueueExample {
 ### **✅ Code Example: Real-time Stock Prices with `ConcurrentSkipListMap`**
 
 ```java
-java
-CopyEdit
 import java.util.concurrent.ConcurrentSkipListMap;
 
 public class SkipListMapExample {
@@ -2144,8 +2060,6 @@ public class SkipListMapExample {
 ### **✅ Code Example: Read-Heavy Logging System**
 
 ```java
-java
-CopyEdit
 import java.util.concurrent.CopyOnWriteArrayList;
 
 public class CopyOnWriteArrayListExample {
@@ -2196,8 +2110,6 @@ public class CopyOnWriteArrayListExample {
 ### **✅ Code Example: Unique User Sessions**
 
 ```java
-java
-CopyEdit
 import java.util.concurrent.CopyOnWriteArraySet;
 
 public class CopyOnWriteSetExample {
@@ -2290,8 +2202,6 @@ Java provides **atomic variable classes** in `java.util.concurrent.atomic` that 
 ### **✅ `AtomicInteger` Example: Multi-threaded Counter**
 
 ```java
-java
-CopyEdit
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class AtomicCounterExample {
@@ -2328,8 +2238,6 @@ public class AtomicCounterExample {
 ### **✅ `AtomicReference<T>` Example: Updating Shared Objects Safely**
 
 ```java
-java
-CopyEdit
 import java.util.concurrent.atomic.AtomicReference;
 
 class User {
@@ -2382,8 +2290,6 @@ Solution? **LongAdder** & **LongAccumulator** distribute updates across multiple
 ### **✅ `LongAdder` Example: High-Throughput Counter**
 
 ```java
-java
-CopyEdit
 import java.util.concurrent.atomic.LongAdder;
 
 public class LongAdderExample {
@@ -2420,8 +2326,6 @@ public class LongAdderExample {
 ### **✅ `LongAccumulator` Example: Custom Accumulation (Multiplication)**
 
 ```java
-java
-CopyEdit
 import java.util.concurrent.atomic.LongAccumulator;
 
 public class LongAccumulatorExample {
@@ -2462,8 +2366,6 @@ public class LongAccumulatorExample {
 ### **✅ CAS-Based Counter Using `AtomicInteger`**
 
 ```java
-java
-CopyEdit
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class CASExample {
@@ -2545,8 +2447,6 @@ In a **multi-threaded environment**, sharing data across threads can lead to **r
 ### **✅ Example: Using `ThreadLocal` for Thread-Specific Data**
 
 ```java
-java
-CopyEdit
 class ThreadLocalExample {
     // Create a ThreadLocal variable for each thread
     private static final ThreadLocal<Integer> threadLocalValue = ThreadLocal.withInitial(() -> 0);
@@ -2570,7 +2470,6 @@ class ThreadLocalExample {
 
 ```
 rust
-CopyEdit
 Thread-0 -> 1
 Thread-1 -> 1
 
@@ -2597,8 +2496,6 @@ Each thread gets its **own separate variable**, avoiding conflicts.
 ### **✅ Example: Using `InheritableThreadLocal` to Share Data with Child Threads**
 
 ```java
-java
-CopyEdit
 class InheritableThreadLocalExample {
     private static final InheritableThreadLocal<String> threadLocalUser = new InheritableThreadLocal<>();
 
@@ -2619,7 +2516,6 @@ class InheritableThreadLocalExample {
 
 ```
 yaml
-CopyEdit
 Thread-0 inherited: Admin
 
 ```
@@ -2671,7 +2567,6 @@ Concurrency in Java is closely tied to how the **JVM manages threads, memory, an
     
     ```
     sh
-    CopyEdit
     jstack <PID> > thread_dump.txt
     
     ```
@@ -2680,7 +2575,6 @@ Concurrency in Java is closely tied to how the **JVM manages threads, memory, an
     
     ```
     sh
-    CopyEdit
     jcmd <PID> Thread.print > thread_dump.txt
     
     ```
@@ -2693,7 +2587,6 @@ If two threads hold locks and wait for each other, `jstack` output might show:
 
 ```
 csharp
-CopyEdit
 Found one Java-level deadlock:
 Thread-1 is waiting for lock held by Thread-2
 Thread-2 is waiting for lock held by Thread-1
@@ -2723,8 +2616,6 @@ Thread-2 is waiting for lock held by Thread-1
 Instead of synchronizing an entire method:
 
 ```java
-java
-CopyEdit
 public synchronized void increment() {
     count++;
 }
@@ -2734,8 +2625,6 @@ public synchronized void increment() {
 🔹 **Use fine-grained locking:**
 
 ```java
-java
-CopyEdit
 public void increment() {
     synchronized (this) {
         count++;
@@ -2747,8 +2636,6 @@ public void increment() {
 🔹 **Use `AtomicInteger` to remove locks:**
 
 ```java
-java
-CopyEdit
 private AtomicInteger count = new AtomicInteger(0);
 public void increment() {
     count.incrementAndGet();
@@ -2782,7 +2669,6 @@ Use JVM options to enable **G1 Garbage Collector**:
 
 ```
 sh
-CopyEdit
 java -XX:+UseG1GC -Xms1g -Xmx4g -XX:MaxGCPauseMillis=100 MyApp
 
 ```
@@ -2821,8 +2707,6 @@ java -XX:+UseG1GC -Xms1g -Xmx4g -XX:MaxGCPauseMillis=100 MyApp
 ### **✅ Example: Creating a Simple CompletableFuture**
 
 ```java
-java
-CopyEdit
 import java.util.concurrent.CompletableFuture;
 
 public class AsyncExample {
@@ -2841,7 +2725,6 @@ public class AsyncExample {
 
 ```
 arduino
-CopyEdit
 Task executed in: ForkJoinPool.commonPool-worker-1
 
 ```
@@ -2859,8 +2742,6 @@ Task executed in: ForkJoinPool.commonPool-worker-1
 ### **✅ Example: Chaining Computations**
 
 ```java
-java
-CopyEdit
 import java.util.concurrent.CompletableFuture;
 
 public class FutureChaining {
@@ -2879,7 +2760,6 @@ public class FutureChaining {
 
 ```
 sql
-CopyEdit
 Final Result: 25
 
 ```
@@ -2895,8 +2775,6 @@ Final Result: 25
 ### **✅ Example: Handling Exceptions**
 
 ```java
-java
-CopyEdit
 import java.util.concurrent.CompletableFuture;
 
 public class ExceptionHandling {
@@ -2919,7 +2797,6 @@ public class ExceptionHandling {
 
 ```
 makefile
-CopyEdit
 Error: java.lang.RuntimeException: Something went wrong!
 Result: 0
 
@@ -2938,8 +2815,6 @@ Result: 0
 ### **✅ Example: Simple Flow API Publisher & Subscriber**
 
 ```java
-java
-CopyEdit
 import java.util.concurrent.Flow;
 import java.util.concurrent.SubmissionPublisher;
 
@@ -2977,7 +2852,6 @@ public class FlowExample {
 
 ```
 makefile
-CopyEdit
 Received: Hello, Reactive World!
 Processing Complete
 
@@ -2996,8 +2870,6 @@ Processing Complete
 ### **✅ Example: Reactive Programming Using Project Reactor**
 
 ```java
-java
-CopyEdit
 import reactor.core.publisher.Flux;
 
 public class ReactorExample {
@@ -3014,7 +2886,6 @@ public class ReactorExample {
 
 ```
 css
-CopyEdit
 a
 b
 c
@@ -3064,8 +2935,6 @@ Choosing the correct concurrency model depends on the **use case**:
 Using an `ExecutorService` to efficiently manage multiple threads:
 
 ```java
-java
-CopyEdit
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -3088,7 +2957,6 @@ public class ExecutorExample {
 
 ```
 arduino
-CopyEdit
 Executing Task 1 in pool-1-thread-1
 Executing Task 2 in pool-1-thread-2
 Executing Task 3 in pool-1-thread-3
@@ -3110,8 +2978,6 @@ Deadlocks happen when **two or more threads wait for each other’s lock indefin
 ### **✅ Example: Deadlock Scenario**
 
 ```java
-java
-CopyEdit
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -3153,8 +3019,6 @@ public class DeadlockExample {
 - **Use `tryLock()` with timeouts to avoid waiting forever.**
 
 ```java
-java
-CopyEdit
 if (lock1.tryLock() && lock2.tryLock()) {
     try {
         // Critical section
@@ -3200,8 +3064,6 @@ If a system has **4 cores** and **spends 80% time waiting for I/O**, the optimal
 ### ✅ **Code: Choosing Optimal Thread Pool**
 
 ```java
-java
-CopyEdit
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -3240,7 +3102,7 @@ public class OptimizedThreadPool {
 
 ```
 sh
-CopyEdit
+
 jstack <PID> > threaddump.txt
 
 ```
