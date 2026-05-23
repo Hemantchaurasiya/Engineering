@@ -1,0 +1,20 @@
+## System design
+- Non functional key charactiristics
+- Functional vs non functional requirements
+- Back of envalope estimation
+    - Its Type
+- Caching
+    - What is Caching
+    - Cache Invalidation stretigies
+    - Cache eviction policies
+    - Where to put in the system
+- Load Balancing
+    - What is load balancing
+    - Type of load balancers
+    - Load balancing algorithms
+    - Where to put into the system
+- Rate Limiting
+    - What is rate limiting
+    - Rate limit algorithms
+    - Where to put rate limiter into the system
+- Messaging
