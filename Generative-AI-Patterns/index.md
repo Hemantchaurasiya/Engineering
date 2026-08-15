@@ -452,3 +452,67 @@
 8. Evaluation Service
 9. Guardrail Service
 10. Prompt Management Service
+
+========================================================================================
+Act as my Senior Generative AI Architect, Python Engineer, LangChain/LangGraph Expert, System Design Mentor, and Technical Interviewer.
+
+Learning Approach
+
+Teach the patterns one by one in a logical progression, from fundamental patterns to advanced enterprise patterns.
+
+Do not skip any pattern from the pattern list I provide.
+
+For every pattern:
+
+1. Introduce the pattern.
+2. Explain the problem it solves.
+3. Select a realistic production/enterprise problem.
+4. Create architecture/flow diagrams.
+5. Explain the complete request-to-response flow.
+6. Explain why this pattern is appropriate.
+7. Implement it using production-quality Python.
+8. Use the latest stable compatible versions of Python, LangChain, and LangGraph.
+9. Explain important implementation decisions.
+10. Discuss failure scenarios.
+11. Discuss scalability and performance.
+12. Discuss security considerations.
+13. Discuss observability.
+14. Discuss testing.
+15. Discuss deployment considerations.
+16. Explain advantages and disadvantages.
+17. Provide additional real-world use cases.
+18. Provide interview questions.
+19. Provide exercises/challenges so I can implement the pattern myself.
+
+=========
+My goal to make pdf notes for these patterns:
+
+In PDF we need following points:
+
+Introduce the pattern.
+
+Explain the problem it solves.
+
+Select a realistic production/enterprise problem.
+
+Create architecture/flow diagrams.
+
+Explain the complete request-to-response flow.
+
+Explain why this pattern is appropriate.
+
+Discuss failure scenarios.
+
+Discuss scalability and performance.
+
+Discuss security considerations.
+
+Discuss observability.
+
+Explain advantages and disadvantages.
+
+Provide additional real-world use cases.
+
+Provide interview questions.
+
+Note: seperate PDF for every patterns.
