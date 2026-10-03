@@ -338,3 +338,512 @@ if __name__ == "__main__":
 ---
 
 ⬅ [1. Sequential Workflow](01-sequential-workflow.md) | [Back to index](README.md) | Next: [3. Conditional Workflow](03-conditional-workflow.md) ➡
+
+# Contract Review Assistant — Parallel Workflow (Java + Spring AI)
+
+A Java port of the LangGraph fan-out/fan-in workflow (`START -> {3 branches} -> merge -> END`),
+built on:
+
+- **Java 25** (current LTS) — using virtual threads for true branch concurrency
+- **Spring Boot 4.1.0**
+- **Spring AI 2.0.0** (GA) with the **Ollama** starter, mirroring `langchain-ollama` / `llama3.1:8b`
+
+## Mapping the shape
+
+The Python version relies on `asyncio` + LangGraph's implicit fan-out (three edges leaving
+`START`) to get concurrency, and `ainvoke` to await the join. In Java, the same shape is:
+
+| LangGraph concept | Spring / Java equivalent |
+|---|---|
+| Three edges from `START` | Three `CompletableFuture`s submitted independently |
+| `await app.ainvoke(state)` waiting on all branches | `CompletableFuture.allOf(...).join()` |
+| Node writing to its own dedicated field | Each branch returns its own typed result — no shared mutable state, so there's nothing to race on |
+| `ChatOllama(model="llama3.1:8b", temperature=0)` | Spring AI `ChatClient` over the `spring-ai-starter-model-ollama` auto-configured `OllamaChatModel` |
+| Per-branch `try/except` fallback text | Per-branch `.exceptionally(...)` fallback text |
+| `merge_results` join node | A `mergeResults` method run after `allOf` completes |
+
+Each branch is genuinely independent — no shared field is written by more than one branch — so
+there's no synchronization needed at all; the only coordination point is the join.
+
+Java 25's virtual threads (`Executors.newVirtualThreadPerTaskExecutor()`) are used to run the
+three blocking `ChatClient` calls concurrently without tying up platform threads — the closest
+Java analogue to `asyncio.gather`-style concurrency for I/O-bound calls.
+
+---
+
+## Project structure
+
+```
+contract-review/
+├── pom.xml
+└── src/main/java/com/example/contractreview/
+    ├── ContractReviewApplication.java
+    ├── model/
+    │   └── ContractReviewResult.java
+    ├── pipeline/
+    │   ├── RiskClauseBranch.java
+    │   ├── ComplianceBranch.java
+    │   ├── FinancialTermsBranch.java
+    │   └── ContractReviewService.java
+    ├── web/
+    │   └── ContractReviewController.java
+    └── ContractReviewRunner.java   (CLI demo, mirrors the Python __main__ block)
+└── src/main/resources/
+    └── application.yml
+```
+
+---
+
+## `pom.xml`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.example</groupId>
+    <artifactId>contract-review</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+
+    <properties>
+        <java.version>25</java.version>
+        <spring-ai.version>2.0.0</spring-ai.version>
+    </properties>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.0</version>
+        <relativePath/>
+    </parent>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <!-- Ollama model starter — local llama3.1:8b, same as langchain-ollama -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-ollama</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+```
+
+## `src/main/resources/application.yml`
+
+```yaml
+spring:
+  application:
+    name: contract-review
+  ai:
+    ollama:
+      base-url: http://localhost:11434
+      chat:
+        options:
+          model: llama3.1:8b
+          temperature: 0.0
+
+  # Virtual threads for the request-handling side; the branches use their
+  # own dedicated virtual-thread executor (see ContractReviewService).
+  threads:
+    virtual:
+      enabled: true
+
+logging:
+  level:
+    com.example.contractreview: INFO
+```
+
+---
+
+## Domain model
+
+### `model/ContractReviewResult.java`
+
+```java
+package com.example.contractreview.model;
+
+public record ContractReviewResult(
+        String riskFindings,
+        String complianceFindings,
+        String financialFindings,
+        String finalReport
+) {}
+```
+
+There's no `ContractState` accumulating partial writes here the way `LoanState` did in the
+sequential pipeline — since every branch is independent and none of them read state written by
+another, each branch simply returns its own `String`, and the join assembles them into the result
+record in one step. That sidesteps any question of "is this field populated yet" that a shared
+mutable state object would raise under concurrency.
+
+---
+
+## Branches
+
+Each branch is a small `@Component` exposing a single method that calls the shared `ChatClient`
+with its own system prompt, matching the Python `_call_llm(system_prompt, contract_text)` helper.
+
+### `pipeline/RiskClauseBranch.java`
+
+```java
+package com.example.contractreview.pipeline;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.stereotype.Component;
+
+@Component
+public class RiskClauseBranch {
+
+    private static final Logger log = LoggerFactory.getLogger(RiskClauseBranch.class);
+
+    private static final String SYSTEM_PROMPT = """
+            You are a contracts lawyer. List any risky clauses in this contract \
+            (liability caps, auto-renewal, one-sided termination rights). Be concise, \
+            use bullet points. If none, say 'None found.'
+            """;
+
+    private final ChatClient chatClient;
+
+    public RiskClauseBranch(ChatClient.Builder chatClientBuilder) {
+        this.chatClient = chatClientBuilder.build();
+    }
+
+    public String detectRiskClauses(String contractText) {
+        log.info("BRANCH - detect_risk_clauses (started)");
+        try {
+            String result = chatClient.prompt()
+                    .system(SYSTEM_PROMPT)
+                    .user(contractText)
+                    .call()
+                    .content()
+                    .strip();
+            log.info("BRANCH - detect_risk_clauses (finished)");
+            return result;
+        } catch (Exception e) {
+            log.error("detect_risk_clauses failed: {}", e.getMessage());
+            return "Risk analysis unavailable - needs manual review.";
+        }
+    }
+}
+```
+
+### `pipeline/ComplianceBranch.java`
+
+```java
+package com.example.contractreview.pipeline;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.stereotype.Component;
+
+@Component
+public class ComplianceBranch {
+
+    private static final Logger log = LoggerFactory.getLogger(ComplianceBranch.class);
+
+    private static final String SYSTEM_PROMPT = """
+            You are a compliance officer. Check this contract for data protection / GDPR \
+            mentions and confidentiality terms. Be concise, use bullet points. If a \
+            required item is missing, say so explicitly.
+            """;
+
+    private final ChatClient chatClient;
+
+    public ComplianceBranch(ChatClient.Builder chatClientBuilder) {
+        this.chatClient = chatClientBuilder.build();
+    }
+
+    public String checkCompliance(String contractText) {
+        log.info("BRANCH - check_compliance (started)");
+        try {
+            String result = chatClient.prompt()
+                    .system(SYSTEM_PROMPT)
+                    .user(contractText)
+                    .call()
+                    .content()
+                    .strip();
+            log.info("BRANCH - check_compliance (finished)");
+            return result;
+        } catch (Exception e) {
+            log.error("check_compliance failed: {}", e.getMessage());
+            return "Compliance analysis unavailable - needs manual review.";
+        }
+    }
+}
+```
+
+### `pipeline/FinancialTermsBranch.java`
+
+```java
+package com.example.contractreview.pipeline;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.stereotype.Component;
+
+@Component
+public class FinancialTermsBranch {
+
+    private static final Logger log = LoggerFactory.getLogger(FinancialTermsBranch.class);
+
+    private static final String SYSTEM_PROMPT = """
+            Extract all financial terms from this contract: amounts, currency, payment \
+            schedule, and penalty terms. Be concise, use bullet points.
+            """;
+
+    private final ChatClient chatClient;
+
+    public FinancialTermsBranch(ChatClient.Builder chatClientBuilder) {
+        this.chatClient = chatClientBuilder.build();
+    }
+
+    public String extractFinancialTerms(String contractText) {
+        log.info("BRANCH - extract_financial_terms (started)");
+        try {
+            String result = chatClient.prompt()
+                    .system(SYSTEM_PROMPT)
+                    .user(contractText)
+                    .call()
+                    .content()
+                    .strip();
+            log.info("BRANCH - extract_financial_terms (finished)");
+            return result;
+        } catch (Exception e) {
+            log.error("extract_financial_terms failed: {}", e.getMessage());
+            return "Financial extraction unavailable - needs manual review.";
+        }
+    }
+}
+```
+
+### `pipeline/ContractReviewService.java`
+
+The fan-out / fan-in orchestration — the direct analogue of the three `add_edge(START, ...)`
+calls plus the three `add_edge(..., "merge_results")` calls.
+
+```java
+package com.example.contractreview.pipeline;
+
+import com.example.contractreview.model.ContractReviewResult;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+@Service
+public class ContractReviewService {
+
+    private static final Logger log = LoggerFactory.getLogger(ContractReviewService.class);
+
+    private final RiskClauseBranch riskClauseBranch;
+    private final ComplianceBranch complianceBranch;
+    private final FinancialTermsBranch financialTermsBranch;
+    private final ExecutorService virtualThreadExecutor = Executors.newVirtualThreadPerTaskExecutor();
+
+    public ContractReviewService(RiskClauseBranch riskClauseBranch,
+                                  ComplianceBranch complianceBranch,
+                                  FinancialTermsBranch financialTermsBranch) {
+        this.riskClauseBranch = riskClauseBranch;
+        this.complianceBranch = complianceBranch;
+        this.financialTermsBranch = financialTermsBranch;
+    }
+
+    public ContractReviewResult review(String contractText) {
+        // Fan-out: all three branches are submitted independently and run concurrently
+        // on virtual threads, matching the Python version's asyncio concurrency.
+        CompletableFuture<String> riskFuture =
+                CompletableFuture.supplyAsync(() -> riskClauseBranch.detectRiskClauses(contractText),
+                        virtualThreadExecutor);
+        CompletableFuture<String> complianceFuture =
+                CompletableFuture.supplyAsync(() -> complianceBranch.checkCompliance(contractText),
+                        virtualThreadExecutor);
+        CompletableFuture<String> financialFuture =
+                CompletableFuture.supplyAsync(() -> financialTermsBranch.extractFinancialTerms(contractText),
+                        virtualThreadExecutor);
+
+        // Fan-in: block only until ALL three have completed, same as the join node
+        // that LangGraph runs once every incoming edge has fired.
+        CompletableFuture.allOf(riskFuture, complianceFuture, financialFuture).join();
+
+        return mergeResults(riskFuture.join(), complianceFuture.join(), financialFuture.join());
+    }
+
+    private ContractReviewResult mergeResults(String riskFindings, String complianceFindings,
+                                               String financialFindings) {
+        log.info("JOIN - merge_results");
+        String report = """
+                # Contract Review Report
+
+                ## Risk Clauses
+                %s
+
+                ## Compliance
+                %s
+
+                ## Financial Terms
+                %s
+                """.formatted(riskFindings, complianceFindings, financialFindings);
+
+        return new ContractReviewResult(riskFindings, complianceFindings, financialFindings, report);
+    }
+}
+```
+
+---
+
+## Entry points
+
+### `web/ContractReviewController.java`
+
+```java
+package com.example.contractreview.web;
+
+import com.example.contractreview.model.ContractReviewResult;
+import com.example.contractreview.pipeline.ContractReviewService;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+public class ContractReviewController {
+
+    private final ContractReviewService contractReviewService;
+
+    public ContractReviewController(ContractReviewService contractReviewService) {
+        this.contractReviewService = contractReviewService;
+    }
+
+    @PostMapping("/api/contract-reviews")
+    public ContractReviewResult review(@RequestBody String contractText) {
+        return contractReviewService.review(contractText);
+    }
+}
+```
+
+### `ContractReviewRunner.java` (CLI demo, mirrors the Python `if __name__ == "__main__"` block)
+
+```java
+package com.example.contractreview;
+
+import com.example.contractreview.pipeline.ContractReviewService;
+import org.springframework.boot.CommandLineRunner;
+import org.springframework.context.annotation.Profile;
+import org.springframework.stereotype.Component;
+
+@Component
+@Profile("demo")
+public class ContractReviewRunner implements CommandLineRunner {
+
+    private final ContractReviewService contractReviewService;
+
+    public ContractReviewRunner(ContractReviewService contractReviewService) {
+        this.contractReviewService = contractReviewService;
+    }
+
+    @Override
+    public void run(String... args) {
+        String sampleContract = """
+                This Master Services Agreement automatically renews annually unless
+                either party gives 90 days' notice. Vendor's liability is capped at
+                $500 regardless of damages. Client agrees to pay $12,000/month, due on
+                the 1st, with a 5%% late penalty after 10 days. Confidential information
+                must be protected per applicable data protection law.
+                """;
+
+        var result = contractReviewService.review(sampleContract);
+        System.out.println(result.finalReport());
+    }
+}
+```
+
+### `ContractReviewApplication.java`
+
+```java
+package com.example.contractreview;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class ContractReviewApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(ContractReviewApplication.class, args);
+    }
+}
+```
+
+---
+
+## Running it
+
+```bash
+ollama pull llama3.1:8b
+ollama serve   # if not already running
+
+# CLI demo (prints the report, like the Python script)
+mvn spring-boot:run -Dspring-boot.run.profiles=demo
+
+# Or as a service
+mvn spring-boot:run
+curl -X POST localhost:8080/api/contract-reviews \
+  -H "Content-Type: text/plain" \
+  --data-binary @sample-contract.txt
+```
+
+## Notes on the port
+
+- **Concurrency model**: `asyncio.gather`-style concurrency becomes three `CompletableFuture`s on
+  virtual threads plus `CompletableFuture.allOf(...).join()`. Since the branches are I/O-bound
+  (waiting on the Ollama HTTP call) rather than CPU-bound, virtual threads give the same "many
+  cheap concurrent waiters" benefit `asyncio` gives Python, without needing an async `ChatClient`
+  API or a reactive stack.
+- **No shared mutable state**: `ContractState` in Python has three `Optional` fields that each
+  branch fills in independently — safe there because Python's node functions each return a small
+  dict merged into state by LangGraph, one key at a time. In Java, skipping the shared record
+  entirely (each branch returns its own `String`, merged only at the join) removes any need to
+  reason about partial/concurrent writes to one object.
+- **Per-branch resilience**: each branch's `try/catch` mirrors the Python `try/except` exactly —
+  a failed branch degrades to a "needs manual review" placeholder instead of failing the whole
+  request.
+- **Versions**: Spring AI's `spring-ai-starter-model-ollama` auto-configures an `OllamaChatModel`
+  from `spring.ai.ollama.*` properties, the same role `ChatOllama(model=..., temperature=...)`
+  plays in the Python version — point `base-url` at your local Ollama instance.
