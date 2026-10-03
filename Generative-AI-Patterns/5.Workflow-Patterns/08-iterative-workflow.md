@@ -358,3 +358,527 @@ if __name__ == "__main__":
 ---
 
 ⬅ [7. Fan-Out / Fan-In](07-fan-out-fan-in.md) | [Back to index](README.md) | Next: [9. Loop Workflow](09-loop-workflow.md) ➡
+
+# Compliant Ad Copy Generator — Iterative Workflow (Java + Spring AI)
+
+A Java port of the LangGraph iterative workflow — `generate -> critique -> revise -> critique ->
+...` until approved or a max attempt count is hit. Built on:
+
+- **Java 25** (current LTS)
+- **Spring Boot 4.1.0**
+- **Spring AI 2.0.0** (GA) with the **Ollama** starter, mirroring `llama3.1:8b`
+
+## Mapping the shape
+
+This is the one workflow in the series where the LangGraph *graph* shape genuinely encodes
+something a straight-line Java translation has to be deliberate about: `revise_draft` has an edge
+back to `critique_draft`, which is what makes it a loop rather than a chain. In Java, a
+loop-with-an-exit-condition is exactly what a `while` loop is for — there's no need for a graph
+object to express "go back to step 2" the way there's no need for one to express "run these three
+things in parallel." The important thing to carry over faithfully is the **exit condition
+order** (check approval first, then the attempt cap) and the **critique's structured output**.
+
+| LangGraph concept | Spring / Java equivalent |
+|---|---|
+| `generate_draft` (runs once, before the loop) | `AdCopyGenerationService.generate(...)` called once before the loop |
+| `critique_draft` (runs once per loop pass) | `DraftCritiqueStep.critique(...)` called at the top of each loop iteration |
+| `json.loads(response.content)` + manual parsing | `.call().entity(CritiqueResult.class)` structured output |
+| `route_after_critique` (approved? then cap? else loop) | `while` loop condition, checked in the same order |
+| `revise_draft` edge back to `critique_draft` | The `while` loop's back-edge, i.e. just looping |
+| `finalize_approved` / `finalize_needs_review` | Two `AdCopyResult` construction sites after the loop exits |
+
+---
+
+## Project structure
+
+```
+ad-copy-generator/
+├── pom.xml
+└── src/main/java/com/example/adcopygenerator/
+    ├── AdCopyGeneratorApplication.java
+    ├── model/
+    │   ├── AdCopyResult.java
+    │   └── CritiqueResult.java
+    ├── pipeline/
+    │   ├── ComplianceRules.java
+    │   ├── DraftGenerationStep.java
+    │   ├── DraftCritiqueStep.java
+    │   ├── DraftRevisionStep.java
+    │   └── AdCopyGenerationService.java
+    ├── web/
+    │   └── AdCopyGeneratorController.java
+    └── AdCopyGeneratorRunner.java   (CLI demo, mirrors the Python __main__ block)
+└── src/main/resources/
+    └── application.yml
+```
+
+---
+
+## `pom.xml`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.example</groupId>
+    <artifactId>ad-copy-generator</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+
+    <properties>
+        <java.version>25</java.version>
+        <spring-ai.version>2.0.0</spring-ai.version>
+    </properties>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.0</version>
+        <relativePath/>
+    </parent>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <!-- Ollama model starter — local llama3.1:8b, same as langchain-ollama -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-ollama</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+```
+
+## `src/main/resources/application.yml`
+
+```yaml
+spring:
+  application:
+    name: ad-copy-generator
+  ai:
+    ollama:
+      base-url: http://localhost:11434
+      chat:
+        options:
+          model: llama3.1:8b
+          temperature: 0.3
+
+logging:
+  level:
+    com.example.adcopygenerator: INFO
+```
+
+---
+
+## Domain model
+
+### `model/CritiqueResult.java`
+
+Structured output target for the critique call — replaces the manual `json.loads` + `try/except`
+block entirely.
+
+```java
+package com.example.adcopygenerator.model;
+
+import com.fasterxml.jackson.annotation.JsonClassDescription;
+import com.fasterxml.jackson.annotation.JsonPropertyDescription;
+
+@JsonClassDescription("Compliance review verdict for a piece of ad copy")
+public record CritiqueResult(
+        @JsonPropertyDescription("true if the ad copy passes all compliance rules")
+        boolean approved,
+        @JsonPropertyDescription("Specific issue and how to fix it, or empty string if approved")
+        String feedback
+) {}
+```
+
+### `model/AdCopyResult.java`
+
+```java
+package com.example.adcopygenerator.model;
+
+public record AdCopyResult(String finalCopy, String finalStatus, int attemptCount) {}
+```
+
+There's no `AdCopyState` record carrying every intermediate field the way the sequential and
+branching ports needed one — the loop's local variables (`draft`, `attemptCount`) live directly
+in `AdCopyGenerationService.generate`, since nothing outside that one method ever needs to
+observe them mid-loop. This is the natural Java shape for "a loop with local state," where the
+Python version needs an explicit state object because LangGraph re-invokes each node as a
+separate function call.
+
+---
+
+## Steps
+
+### `pipeline/ComplianceRules.java`
+
+```java
+package com.example.adcopygenerator.pipeline;
+
+public final class ComplianceRules {
+
+    public static final String TEXT = """
+            1. No unqualified superlative claims (e.g. 'the best', 'guaranteed', \
+            '#1') unless immediately followed by a supporting fact.
+            2. Must be 150 characters or fewer.""";
+
+    private ComplianceRules() {
+    }
+}
+```
+
+### `pipeline/DraftGenerationStep.java`
+
+Runs once, before the loop — the direct analogue of `generate_draft`.
+
+```java
+package com.example.adcopygenerator.pipeline;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.stereotype.Component;
+
+@Component
+public class DraftGenerationStep {
+
+    private static final Logger log = LoggerFactory.getLogger(DraftGenerationStep.class);
+
+    private static final String GENERATE_PROMPT = """
+            Write a short ad for this product. Follow these rules:
+            {rules}
+
+            Product brief: {brief}
+
+            Respond with ONLY the ad copy text, nothing else.
+            """;
+
+    private final ChatClient chatClient;
+
+    public DraftGenerationStep(ChatClient.Builder chatClientBuilder) {
+        this.chatClient = chatClientBuilder.build();
+    }
+
+    public String generate(String brief) {
+        log.info("GENERATE - writing first draft");
+        return chatClient.prompt()
+                .user(u -> u.text(GENERATE_PROMPT).param("rules", ComplianceRules.TEXT).param("brief", brief))
+                .call()
+                .content()
+                .strip();
+    }
+}
+```
+
+### `pipeline/DraftCritiqueStep.java`
+
+Runs once per loop pass — the direct analogue of `critique_draft`, but with structured output
+instead of manual JSON parsing.
+
+```java
+package com.example.adcopygenerator.pipeline;
+
+import com.example.adcopygenerator.model.CritiqueResult;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.stereotype.Component;
+
+@Component
+public class DraftCritiqueStep {
+
+    private static final Logger log = LoggerFactory.getLogger(DraftCritiqueStep.class);
+
+    private static final String CRITIQUE_PROMPT = """
+            You are a strict compliance reviewer. Check this ad copy against these rules:
+            {rules}
+
+            Ad copy: "{draft}"
+            """;
+
+    private final ChatClient chatClient;
+
+    public DraftCritiqueStep(ChatClient.Builder chatClientBuilder) {
+        this.chatClient = chatClientBuilder.build();
+    }
+
+    public CritiqueResult critique(String draft, int attempt, int maxAttempts) {
+        log.info("CRITIQUE - pass {}/{}", attempt, maxAttempts);
+        try {
+            return chatClient.prompt()
+                    .user(u -> u.text(CRITIQUE_PROMPT).param("rules", ComplianceRules.TEXT).param("draft", draft))
+                    .call()
+                    .entity(CritiqueResult.class);
+        } catch (Exception e) {
+            log.error("critique_draft failed to parse response, treating as rejected: {}", e.getMessage());
+            return new CritiqueResult(false,
+                    "Automated review could not parse a clear result; please re-check manually.");
+        }
+    }
+}
+```
+
+### `pipeline/DraftRevisionStep.java`
+
+Feeds back into another critique pass — the direct analogue of `revise_draft`.
+
+```java
+package com.example.adcopygenerator.pipeline;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.stereotype.Component;
+
+@Component
+public class DraftRevisionStep {
+
+    private static final Logger log = LoggerFactory.getLogger(DraftRevisionStep.class);
+
+    private static final String REVISE_PROMPT = """
+            Revise this ad copy to fix the specific issue below. Keep everything \
+            else that already works. Follow these rules:
+            {rules}
+
+            Current ad copy: "{draft}"
+            Issue to fix: {feedback}
+
+            Respond with ONLY the revised ad copy text, nothing else.
+            """;
+
+    private final ChatClient chatClient;
+
+    public DraftRevisionStep(ChatClient.Builder chatClientBuilder) {
+        this.chatClient = chatClientBuilder.build();
+    }
+
+    public String revise(String draft, String feedback, int attemptCount) {
+        log.info("REVISE - attempt {}, applying feedback: {}", attemptCount, feedback);
+        return chatClient.prompt()
+                .user(u -> u.text(REVISE_PROMPT)
+                        .param("rules", ComplianceRules.TEXT)
+                        .param("draft", draft)
+                        .param("feedback", feedback))
+                .call()
+                .content()
+                .strip();
+    }
+}
+```
+
+---
+
+## The loop
+
+### `pipeline/AdCopyGenerationService.java`
+
+The `while` loop is the direct analogue of the `revise_draft -> critique_draft` back-edge; the
+loop condition preserves the Python router's exact check order — approval first, then the
+attempt cap.
+
+```java
+package com.example.adcopygenerator.pipeline;
+
+import com.example.adcopygenerator.model.AdCopyResult;
+import com.example.adcopygenerator.model.CritiqueResult;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+
+@Service
+public class AdCopyGenerationService {
+
+    private static final Logger log = LoggerFactory.getLogger(AdCopyGenerationService.class);
+
+    private final DraftGenerationStep draftGenerationStep;
+    private final DraftCritiqueStep draftCritiqueStep;
+    private final DraftRevisionStep draftRevisionStep;
+
+    public AdCopyGenerationService(DraftGenerationStep draftGenerationStep,
+                                   DraftCritiqueStep draftCritiqueStep,
+                                   DraftRevisionStep draftRevisionStep) {
+        this.draftGenerationStep = draftGenerationStep;
+        this.draftCritiqueStep = draftCritiqueStep;
+        this.draftRevisionStep = draftRevisionStep;
+    }
+
+    public AdCopyResult generate(String brief, int maxAttempts) {
+        String draft = draftGenerationStep.generate(brief);
+
+        int attemptCount = 0;
+        CritiqueResult critique;
+
+        while (true) {
+            attemptCount++;
+            critique = draftCritiqueStep.critique(draft, attemptCount, maxAttempts);
+
+            // route_after_critique, in the same order: approved first, then the attempt cap.
+            if (critique.approved()) {
+                log.info("FINALIZE - approved after {} attempt(s)", attemptCount);
+                return new AdCopyResult(draft, "approved", attemptCount);
+            }
+
+            if (attemptCount >= maxAttempts) {
+                log.warn("FINALIZE - max attempts reached, flagging for human review");
+                return new AdCopyResult(draft, "needs_human_review", attemptCount);
+            }
+
+            draft = draftRevisionStep.revise(draft, critique.feedback(), attemptCount);
+        }
+    }
+}
+```
+
+---
+
+## Entry points
+
+### `web/AdCopyGeneratorController.java`
+
+```java
+package com.example.adcopygenerator.web;
+
+import com.example.adcopygenerator.model.AdCopyResult;
+import com.example.adcopygenerator.pipeline.AdCopyGenerationService;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+public class AdCopyGeneratorController {
+
+    private final AdCopyGenerationService adCopyGenerationService;
+
+    public AdCopyGeneratorController(AdCopyGenerationService adCopyGenerationService) {
+        this.adCopyGenerationService = adCopyGenerationService;
+    }
+
+    public record GenerateRequest(String brief, Integer maxAttempts) {}
+
+    @PostMapping("/api/ad-copy")
+    public AdCopyResult generate(@RequestBody GenerateRequest request) {
+        int maxAttempts = request.maxAttempts() != null ? request.maxAttempts() : 3;
+        return adCopyGenerationService.generate(request.brief(), maxAttempts);
+    }
+}
+```
+
+### `AdCopyGeneratorRunner.java` (CLI demo, mirrors the Python `if __name__ == "__main__"` block)
+
+```java
+package com.example.adcopygenerator;
+
+import com.example.adcopygenerator.pipeline.AdCopyGenerationService;
+import org.springframework.boot.CommandLineRunner;
+import org.springframework.context.annotation.Profile;
+import org.springframework.stereotype.Component;
+
+@Component
+@Profile("demo")
+public class AdCopyGeneratorRunner implements CommandLineRunner {
+
+    private final AdCopyGenerationService adCopyGenerationService;
+
+    public AdCopyGeneratorRunner(AdCopyGenerationService adCopyGenerationService) {
+        this.adCopyGenerationService = adCopyGenerationService;
+    }
+
+    @Override
+    public void run(String... args) {
+        var result = adCopyGenerationService.generate(
+                "A wireless noise-cancelling headphone with 40-hour battery life, launching at $199.",
+                3);
+
+        System.out.printf("Status: %s (after %d attempt(s))%n", result.finalStatus(), result.attemptCount());
+        System.out.println("Final copy: " + result.finalCopy());
+    }
+}
+```
+
+### `AdCopyGeneratorApplication.java`
+
+```java
+package com.example.adcopygenerator;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class AdCopyGeneratorApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(AdCopyGeneratorApplication.class, args);
+    }
+}
+```
+
+---
+
+## Running it
+
+```bash
+ollama pull llama3.1:8b
+ollama serve   # if not already running
+
+# CLI demo (prints status + final copy, like the Python script)
+mvn spring-boot:run -Dspring-boot.run.profiles=demo
+
+# Or as a service
+mvn spring-boot:run
+curl -X POST localhost:8080/api/ad-copy \
+  -H "Content-Type: application/json" \
+  -d '{"brief":"A wireless noise-cancelling headphone with 40-hour battery life, launching at $199.","maxAttempts":3}'
+```
+
+## Notes on the port
+
+- **Graph loop → `while` loop**: the `revise_draft -> critique_draft` back-edge is what makes the
+  Python graph a loop instead of a chain; in Java, that's just... a loop. No graph object is
+  needed to express "go back and try again," the same way none was needed for "run these three
+  things in parallel" in the earlier fan-out ports.
+- **Exit-condition order preserved exactly**: `route_after_critique` checks `approved` before the
+  attempt cap, and the `while` loop here does the same — checking the cap first would change
+  behavior on the last allowed attempt (an approval on attempt `maxAttempts` would incorrectly
+  fall through to `needs_human_review` instead of `approved`).
+- **Structured critique output**: `.call().entity(CritiqueResult.class)` replaces the manual
+  `json.loads(response.content)` + `try/except`, with the same fallback behavior on failure —
+  treat an unparsable critique as rejected, with an explanatory feedback string, so the loop still
+  makes progress (or correctly exhausts its attempts) rather than crashing.
+- **No `AdCopyState` god-object**: because the loop lives in one method rather than being replayed
+  node-by-node by a graph engine, `draft` and `attemptCount` are just local variables — there's
+  nothing to gain from wrapping them in a record the way `LoanState` or `TicketState` needed to be
+  in the earlier ports, where each "node" was a separate call that only communicated through
+  shared state.
+- **Versions**: same Ollama-backed `spring-ai-starter-model-ollama` / `llama3.1:8b` setup as the
+  other ports in this series.
