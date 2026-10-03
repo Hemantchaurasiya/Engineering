@@ -361,3 +361,585 @@ if __name__ == "__main__":
 ---
 
 ⬅ [12. Human Approval Workflow](12-human-approval-workflow.md) | [Back to index](README.md) | Next: [14. Async Workflow](14-async-workflow.md) ➡
+
+# Warehouse Event Processor — Event-Driven Workflow (Java + Spring AI)
+
+A Java port of the LangGraph event-driven workflow — triggered by an external event, dispatched
+by event type, and reacting by **publishing new events** rather than calling other systems
+directly. Built on:
+
+- **Java 25** (current LTS)
+- **Spring Boot 4.1.0**
+- **Spring AI 2.0.0** (GA) with the **Ollama** starter, mirroring `llama3.1:8b`
+
+## Mapping the shape
+
+Two things distinguish this from the earlier routing/branching ports: the dispatch key is an
+**open-ended string** from an external bus (not a fixed enum Java could exhaustively switch over),
+and an unrecognized type must be handled gracefully rather than erroring — this consumer doesn't
+own every event type on the bus. That rules out a `sealed`/`enum` `switch` as the dispatch
+mechanism (there's no way to enumerate "every possible external event type" at compile time), so
+a `Map<String, EventHandler>` with an explicit fallback is the more honest translation of Python's
+`dict.get(state.event_type, "handle_unknown_event")`.
+
+| LangGraph concept | Spring / Java equivalent |
+|---|---|
+| `dispatch_event(state) -> str` via `dict.get(..., "handle_unknown_event")` | `Map<String, EventHandler>` lookup with `.getOrDefault(eventType, unknownEventHandler)` |
+| `handle_low_stock` / `handle_shipment_delivered` / `handle_unknown_event` | `LowStockHandler` / `ShipmentDeliveredHandler` / `UnknownEventHandler`, all implementing `EventHandler` |
+| `state.outbound_events + [outbound_event]` (event accumulation) | `List<OutboundEvent>` returned from each handler, collected by the orchestrator |
+| `finalize_and_publish` (all paths converge here) | `EventPublisher.publish(...)`, called once after the handler returns |
+| `message_bus.publish(...)` comment | A `EventPublisher` interface, with a logging implementation standing in for a real Kafka/SQS producer |
+
+---
+
+## Project structure
+
+```
+warehouse-event-processor/
+├── pom.xml
+└── src/main/java/com/example/warehouseevents/
+    ├── WarehouseEventProcessorApplication.java
+    ├── model/
+    │   ├── InboundEvent.java
+    │   ├── OutboundEvent.java
+    │   └── EventProcessingResult.java
+    ├── handler/
+    │   ├── EventHandler.java
+    │   ├── LowStockHandler.java
+    │   ├── ShipmentDeliveredHandler.java
+    │   └── UnknownEventHandler.java
+    ├── publish/
+    │   ├── EventPublisher.java
+    │   └── LoggingEventPublisher.java
+    ├── pipeline/
+    │   └── EventProcessingService.java
+    ├── web/
+    │   └── EventProcessingController.java
+    └── WarehouseEventProcessorRunner.java   (CLI demo, mirrors the Python __main__ block)
+└── src/main/resources/
+    └── application.yml
+```
+
+---
+
+## `pom.xml`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.example</groupId>
+    <artifactId>warehouse-event-processor</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+
+    <properties>
+        <java.version>25</java.version>
+        <spring-ai.version>2.0.0</spring-ai.version>
+    </properties>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.0</version>
+        <relativePath/>
+    </parent>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <!-- Ollama model starter — local llama3.1:8b, same as langchain-ollama -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-ollama</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+```
+
+> **Wiring this to a real bus**: in production, `process_event`/`EventProcessingService.process`
+> would be called from a message-queue consumer loop rather than an HTTP controller — a Kafka
+> `@KafkaListener`, an SQS poller, or similar. The `spring-kafka` / `spring-cloud-aws-sqs`
+> starters are the natural additions to `pom.xml` for that; the REST controller included below is
+> a stand-in so the workflow is directly runnable/testable without standing up a broker, exactly
+> as the Python demo calls `process_event` directly rather than wiring a real consumer.
+
+## `src/main/resources/application.yml`
+
+```yaml
+spring:
+  application:
+    name: warehouse-event-processor
+  ai:
+    ollama:
+      base-url: http://localhost:11434
+      chat:
+        options:
+          model: llama3.1:8b
+          temperature: 0.3
+
+logging:
+  level:
+    com.example.warehouseevents: INFO
+```
+
+---
+
+## Domain model
+
+### `model/InboundEvent.java`
+
+```java
+package com.example.warehouseevents.model;
+
+import java.util.Map;
+
+public record InboundEvent(String eventType, Map<String, Object> payload) {}
+```
+
+### `model/OutboundEvent.java`
+
+```java
+package com.example.warehouseevents.model;
+
+import java.util.Map;
+
+public record OutboundEvent(String eventType, Map<String, Object> payload) {}
+```
+
+### `model/EventProcessingResult.java`
+
+```java
+package com.example.warehouseevents.model;
+
+import java.util.List;
+
+public record EventProcessingResult(String processingStatus, List<OutboundEvent> outboundEvents) {}
+```
+
+---
+
+## Handlers
+
+### `handler/EventHandler.java`
+
+```java
+package com.example.warehouseevents.handler;
+
+import com.example.warehouseevents.model.EventProcessingResult;
+import com.example.warehouseevents.model.InboundEvent;
+
+public interface EventHandler {
+    EventProcessingResult handle(InboundEvent event);
+}
+```
+
+Unlike the `sealed` interfaces used for dispatch in earlier ports (`OutcomeBranch`, `QueryAgent`),
+this one is **not** `sealed` — new event types this service doesn't yet know about are a normal,
+expected occurrence on a shared bus, not a closed set the compiler should enumerate. That's the
+same reasoning the Python version's own comment gives for routing unknown types to a no-op
+handler instead of raising.
+
+### `handler/LowStockHandler.java`
+
+Applies deterministic reorder policy and **publishes** a new event rather than calling the
+procurement system directly — the direct analogue of `handle_low_stock`.
+
+```java
+package com.example.warehouseevents.handler;
+
+import com.example.warehouseevents.model.EventProcessingResult;
+import com.example.warehouseevents.model.InboundEvent;
+import com.example.warehouseevents.model.OutboundEvent;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+
+import java.util.List;
+import java.util.Map;
+
+@Component
+public class LowStockHandler implements EventHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(LowStockHandler.class);
+    private static final int REORDER_POINT = 20; // units
+
+    @Override
+    public EventProcessingResult handle(InboundEvent event) {
+        String sku = String.valueOf(event.payload().getOrDefault("sku", "unknown"));
+        int quantityOnHand = ((Number) event.payload().getOrDefault("quantity_on_hand", 0)).intValue();
+        log.info("EVENT - inventory.low_stock for {} (qty={})", sku, quantityOnHand);
+
+        if (quantityOnHand < REORDER_POINT) {
+            var outboundEvent = new OutboundEvent(
+                    "purchase_order.requested",
+                    Map.of(
+                            "sku", sku,
+                            "requested_quantity", 100, // simplified: fixed reorder quantity
+                            "reason", "Stock (%d) below reorder point (%d).".formatted(quantityOnHand, REORDER_POINT)
+                    ));
+            return new EventProcessingResult("reorder_requested", List.of(outboundEvent));
+        }
+
+        return new EventProcessingResult("no_action_needed", List.of());
+    }
+}
+```
+
+### `handler/ShipmentDeliveredHandler.java`
+
+Drafts a message with the LLM and **publishes** a `customer.notify` event rather than sending the
+notification itself — the direct analogue of `handle_shipment_delivered`.
+
+```java
+package com.example.warehouseevents.handler;
+
+import com.example.warehouseevents.model.EventProcessingResult;
+import com.example.warehouseevents.model.InboundEvent;
+import com.example.warehouseevents.model.OutboundEvent;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.stereotype.Component;
+
+import java.util.List;
+import java.util.Map;
+
+@Component
+public class ShipmentDeliveredHandler implements EventHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(ShipmentDeliveredHandler.class);
+
+    private static final String DELIVERY_MESSAGE_PROMPT = """
+            Write a short, friendly one-sentence delivery confirmation message for a customer.
+
+            Order ID: {orderId}
+            Delivered at: {deliveredAt}
+            """;
+
+    private final ChatClient chatClient;
+
+    public ShipmentDeliveredHandler(ChatClient.Builder chatClientBuilder) {
+        this.chatClient = chatClientBuilder.build();
+    }
+
+    @Override
+    public EventProcessingResult handle(InboundEvent event) {
+        String orderId = String.valueOf(event.payload().getOrDefault("order_id", "unknown"));
+        String deliveredAt = String.valueOf(event.payload().getOrDefault("delivered_at", "just now"));
+        log.info("EVENT - shipment.delivered for order {}", orderId);
+
+        String message;
+        try {
+            message = chatClient.prompt()
+                    .user(u -> u.text(DELIVERY_MESSAGE_PROMPT)
+                            .param("orderId", orderId)
+                            .param("deliveredAt", deliveredAt))
+                    .call()
+                    .content()
+                    .strip();
+        } catch (Exception e) {
+            log.error("handle_shipment_delivered LLM call failed: {}", e.getMessage());
+            message = "Your order %s has been delivered!".formatted(orderId);
+        }
+
+        var outboundEvent = new OutboundEvent(
+                "customer.notify",
+                Map.of("order_id", orderId, "message", message));
+
+        return new EventProcessingResult("notification_queued", List.of(outboundEvent));
+    }
+}
+```
+
+### `handler/UnknownEventHandler.java`
+
+Logs and moves on; does **not** raise — the direct analogue of `handle_unknown_event`.
+
+```java
+package com.example.warehouseevents.handler;
+
+import com.example.warehouseevents.model.EventProcessingResult;
+import com.example.warehouseevents.model.InboundEvent;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+
+import java.util.List;
+
+@Component
+public class UnknownEventHandler implements EventHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(UnknownEventHandler.class);
+
+    @Override
+    public EventProcessingResult handle(InboundEvent event) {
+        log.warn("EVENT - unrecognized event_type '{}', ignoring", event.eventType());
+        return new EventProcessingResult("ignored_unknown_event", List.of());
+    }
+}
+```
+
+---
+
+## Publishing
+
+### `publish/EventPublisher.java`
+
+```java
+package com.example.warehouseevents.publish;
+
+import com.example.warehouseevents.model.OutboundEvent;
+
+public interface EventPublisher {
+    void publish(OutboundEvent event);
+}
+```
+
+### `publish/LoggingEventPublisher.java`
+
+The direct analogue of `finalize_and_publish`'s simulated `logger.info(...)` — swap this
+implementation for a real Kafka/SQS producer in production, same as the Python comment
+(`# In production: message_bus.publish(...)`) implies.
+
+```java
+package com.example.warehouseevents.publish;
+
+import com.example.warehouseevents.model.OutboundEvent;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+
+@Component
+public class LoggingEventPublisher implements EventPublisher {
+
+    private static final Logger log = LoggerFactory.getLogger(LoggingEventPublisher.class);
+
+    @Override
+    public void publish(OutboundEvent event) {
+        // In production: kafkaTemplate.send(event.eventType(), event.payload());
+        log.info("PUBLISH - {}: {}", event.eventType(), event.payload());
+    }
+}
+```
+
+---
+
+## Dispatch and orchestration
+
+### `pipeline/EventProcessingService.java`
+
+The direct analogue of `dispatch_event` plus the graph's convergence into
+`finalize_and_publish`.
+
+```java
+package com.example.warehouseevents.pipeline;
+
+import com.example.warehouseevents.handler.EventHandler;
+import com.example.warehouseevents.handler.LowStockHandler;
+import com.example.warehouseevents.handler.ShipmentDeliveredHandler;
+import com.example.warehouseevents.handler.UnknownEventHandler;
+import com.example.warehouseevents.model.EventProcessingResult;
+import com.example.warehouseevents.model.InboundEvent;
+import com.example.warehouseevents.publish.EventPublisher;
+import org.springframework.stereotype.Service;
+
+import java.util.Map;
+
+@Service
+public class EventProcessingService {
+
+    private final Map<String, EventHandler> handlersByEventType;
+    private final EventHandler unknownEventHandler;
+    private final EventPublisher eventPublisher;
+
+    public EventProcessingService(LowStockHandler lowStockHandler,
+                                   ShipmentDeliveredHandler shipmentDeliveredHandler,
+                                   UnknownEventHandler unknownEventHandler,
+                                   EventPublisher eventPublisher) {
+        // dispatch_event's dict, in Java form — an open-ended string key, so a Map
+        // rather than an exhaustive enum switch.
+        this.handlersByEventType = Map.of(
+                "inventory.low_stock", lowStockHandler,
+                "shipment.delivered", shipmentDeliveredHandler
+        );
+        this.unknownEventHandler = unknownEventHandler;
+        this.eventPublisher = eventPublisher;
+    }
+
+    public EventProcessingResult process(InboundEvent event) {
+        EventHandler handler = handlersByEventType.getOrDefault(event.eventType(), unknownEventHandler);
+        EventProcessingResult result = handler.handle(event);
+
+        // All paths converge here, exactly like every handler's edge into finalize_and_publish.
+        result.outboundEvents().forEach(eventPublisher::publish);
+
+        return result;
+    }
+}
+```
+
+---
+
+## Entry points
+
+### `web/EventProcessingController.java`
+
+Stands in for a real message-queue consumer loop calling `process_event` for every event it
+receives off the bus.
+
+```java
+package com.example.warehouseevents.web;
+
+import com.example.warehouseevents.model.EventProcessingResult;
+import com.example.warehouseevents.model.InboundEvent;
+import com.example.warehouseevents.pipeline.EventProcessingService;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+public class EventProcessingController {
+
+    private final EventProcessingService eventProcessingService;
+
+    public EventProcessingController(EventProcessingService eventProcessingService) {
+        this.eventProcessingService = eventProcessingService;
+    }
+
+    @PostMapping("/api/events")
+    public EventProcessingResult process(@RequestBody InboundEvent event) {
+        return eventProcessingService.process(event);
+    }
+}
+```
+
+### `WarehouseEventProcessorRunner.java` (CLI demo, mirrors the Python `if __name__ == "__main__"` block)
+
+```java
+package com.example.warehouseevents;
+
+import com.example.warehouseevents.model.InboundEvent;
+import com.example.warehouseevents.pipeline.EventProcessingService;
+import org.springframework.boot.CommandLineRunner;
+import org.springframework.context.annotation.Profile;
+import org.springframework.stereotype.Component;
+
+import java.util.List;
+import java.util.Map;
+
+@Component
+@Profile("demo")
+public class WarehouseEventProcessorRunner implements CommandLineRunner {
+
+    private final EventProcessingService eventProcessingService;
+
+    public WarehouseEventProcessorRunner(EventProcessingService eventProcessingService) {
+        this.eventProcessingService = eventProcessingService;
+    }
+
+    @Override
+    public void run(String... args) {
+        List<InboundEvent> events = List.of(
+                new InboundEvent("inventory.low_stock", Map.of("sku", "SKU-4471", "quantity_on_hand", 12)),
+                new InboundEvent("shipment.delivered", Map.of("order_id", "ORD-8820", "delivered_at", "2026-08-14 14:32")),
+                new InboundEvent("warehouse.temperature_alert", Map.of("zone", "B4", "temp_c", 31)) // unrecognized type
+        );
+
+        for (InboundEvent event : events) {
+            var result = eventProcessingService.process(event);
+            System.out.printf("[%s] status=%s, published=%d event(s)%n%n",
+                    event.eventType(), result.processingStatus(), result.outboundEvents().size());
+        }
+    }
+}
+```
+
+### `WarehouseEventProcessorApplication.java`
+
+```java
+package com.example.warehouseevents;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class WarehouseEventProcessorApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(WarehouseEventProcessorApplication.class, args);
+    }
+}
+```
+
+---
+
+## Running it
+
+```bash
+ollama pull llama3.1:8b
+ollama serve   # if not already running
+
+# CLI demo (prints status/published-count for all 3 sample events, like the Python script)
+mvn spring-boot:run -Dspring-boot.run.profiles=demo
+
+# Or as a service
+mvn spring-boot:run
+curl -X POST localhost:8080/api/events \
+  -H "Content-Type: application/json" \
+  -d '{"eventType":"inventory.low_stock","payload":{"sku":"SKU-4471","quantity_on_hand":12}}'
+```
+
+## Notes on the port
+
+- **Map dispatch, not a `switch`**: this is the one dispatch-by-category port in the series that
+  does *not* use a `sealed` interface + exhaustive `switch`, and that's deliberate — the event
+  types come from an external bus this service doesn't fully own, so "exhaustive" isn't a concept
+  that applies. A `Map<String, EventHandler>` with an explicit `unknownEventHandler` fallback is
+  the direct, honest equivalent of `dict.get(state.event_type, "handle_unknown_event")`, and
+  reads correctly to future maintainers as "open set, graceful fallback" rather than "closed set,
+  compiler-checked."
+- **React by publishing, not by calling**: both `LowStockHandler` and `ShipmentDeliveredHandler`
+  build and return `OutboundEvent`s rather than reaching out to procurement or notification
+  systems directly — preserving the architectural point the Python version's own comments make
+  twice (`# PUBLISHES a new event rather than calling ... directly`).
+- **Unknown events never raise**: `UnknownEventHandler` logs a warning and returns a normal
+  result, matching the Python docstring's explicit instruction not to raise on an unrecognized
+  type — a consumer on a shared bus has to expect event types it doesn't recognize as routine,
+  not exceptional.
+- **Publishing is pluggable**: `EventPublisher` is an interface with a logging implementation
+  standing in for a real broker client, so swapping in `spring-kafka`'s `KafkaTemplate` (or an
+  SQS/SNS client) later touches only `LoggingEventPublisher`, not any handler or the dispatch
+  service.
+- **Versions**: same Ollama-backed `spring-ai-starter-model-ollama` / `llama3.1:8b` setup as the
+  other ports in this series.
