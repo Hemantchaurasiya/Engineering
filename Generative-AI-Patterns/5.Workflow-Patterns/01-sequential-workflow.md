@@ -407,3 +407,690 @@ if __name__ == "__main__":
 ---
 
 ⬅ [Back to index](README.md) | Next: [2. Parallel Workflow](02-parallel-workflow.md) ➡
+
+# Loan Application Processing Pipeline — Java + Spring AI
+
+A Java port of the LangGraph `A -> B -> C -> D -> E` sequential workflow, built on:
+
+- **Java 25** (current LTS)
+- **Spring Boot 4.1.0** (current stable line, built on Spring Framework 7)
+- **Spring AI 2.0.0** (GA, released June 2026 — built on Spring Boot 4)
+
+## Why this maps cleanly onto plain Spring
+
+LangGraph's `StateGraph` earns its keep when a workflow branches, loops, or needs checkpointing.
+This pipeline is a **strict linear chain** — every node has exactly one successor — so in Spring
+there's no need for a graph library at all. A `List` of step beans (or a hand-written chain) gives
+you the same shape with far less machinery. The mapping:
+
+| LangGraph concept | Spring equivalent |
+|---|---|
+| `LoanState` (Pydantic model) | `LoanState` (Java `record`, updated via `with*` methods) |
+| Node function `(state) -> dict` | `@Component` implementing `UnaryOperator<LoanState>` |
+| `graph.add_edge(A, B)` | Ordered `List<UnaryOperator<LoanState>>` in the pipeline service |
+| `ChatAnthropic` + manual JSON parsing | Spring AI `ChatClient` + `.entity(RiskAssessment.class)` structured output |
+| `app.invoke(state)` | `loanPipelineService.process(rawApplication)` |
+
+Because `LoanState` is a record, every step returns a **new** immutable instance instead of
+mutating shared state — a closer, safer analogue to LangGraph's "each node returns a partial
+state update" model than a mutable POJO would be.
+
+---
+
+## Project structure
+
+```
+loan-pipeline/
+├── pom.xml
+└── src/main/java/com/example/loanpipeline/
+    ├── LoanPipelineApplication.java
+    ├── model/
+    │   ├── Decision.java
+    │   ├── LoanState.java
+    │   └── RiskAssessment.java
+    ├── pipeline/
+    │   ├── LoanPipelineStep.java
+    │   ├── ExtractAndNormalizeStep.java
+    │   ├── ValidateApplicationStep.java
+    │   ├── ScoreCreditRiskStep.java
+    │   ├── MakeDecisionStep.java
+    │   ├── GenerateReportStep.java
+    │   └── LoanPipelineService.java
+    ├── web/
+    │   └── LoanController.java
+    └── LoanPipelineRunner.java   (CLI demo, mirrors the Python __main__ block)
+└── src/main/resources/
+    └── application.yml
+```
+
+---
+
+## `pom.xml`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.example</groupId>
+    <artifactId>loan-pipeline</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+
+    <properties>
+        <java.version>25</java.version>
+        <spring-boot.version>4.1.0</spring-boot.version>
+        <spring-ai.version>2.0.0</spring-ai.version>
+    </properties>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.0</version>
+        <relativePath/>
+    </parent>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+        <!-- Anthropic model starter for Spring AI's ChatClient -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-anthropic</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+```
+
+## `src/main/resources/application.yml`
+
+```yaml
+spring:
+  application:
+    name: loan-pipeline
+  ai:
+    anthropic:
+      api-key: ${ANTHROPIC_API_KEY}
+      chat:
+        options:
+          model: claude-sonnet-4-6
+          temperature: 0.0
+
+logging:
+  level:
+    com.example.loanpipeline: INFO
+```
+
+---
+
+## Domain model
+
+### `model/Decision.java`
+
+```java
+package com.example.loanpipeline.model;
+
+public enum Decision {
+    APPROVED,
+    REJECTED,
+    MANUAL_REVIEW
+}
+```
+
+### `model/RiskAssessment.java`
+
+Structured output target for the LLM call — Spring AI converts the model's JSON reply directly
+into this record, so there's no manual `json.loads` / defensive parsing needed.
+
+```java
+package com.example.loanpipeline.model;
+
+import com.fasterxml.jackson.annotation.JsonClassDescription;
+import com.fasterxml.jackson.annotation.JsonPropertyDescription;
+
+@JsonClassDescription("Credit risk assessment for a loan applicant")
+public record RiskAssessment(
+        @JsonPropertyDescription("Risk score from 0-100, higher means lower risk")
+        int riskScore,
+        @JsonPropertyDescription("One-sentence rationale for the score")
+        String rationale
+) {}
+```
+
+### `model/LoanState.java`
+
+The record that flows through every step, with `with*` methods standing in for LangGraph's
+partial-state-update dicts.
+
+```java
+package com.example.loanpipeline.model;
+
+import java.util.List;
+import java.util.Map;
+
+public record LoanState(
+        Map<String, Object> rawApplication,
+
+        // -- extract_and_normalize --
+        String applicantName,
+        Double annualIncome,
+        Double requestedAmount,
+        String employmentStatus,
+        Double creditHistoryYears,
+
+        // -- validate_application --
+        boolean valid,
+        List<String> validationErrors,
+
+        // -- score_credit_risk --
+        Integer riskScore,
+        String riskRationale,
+
+        // -- make_decision --
+        Decision decision,
+        Double approvedAmount,
+
+        // -- generate_report --
+        String finalReport
+) {
+
+    public static LoanState initial(Map<String, Object> rawApplication) {
+        return new LoanState(rawApplication, null, null, null, null, null,
+                true, List.of(), null, null, null, null, null);
+    }
+
+    public LoanState withNormalization(String name, double income, double requested,
+                                        String employment, double historyYears) {
+        return new LoanState(rawApplication, name, income, requested, employment, historyYears,
+                valid, validationErrors, riskScore, riskRationale, decision, approvedAmount, finalReport);
+    }
+
+    public LoanState withValidation(boolean isValid, List<String> errors) {
+        return new LoanState(rawApplication, applicantName, annualIncome, requestedAmount,
+                employmentStatus, creditHistoryYears, isValid, errors, riskScore, riskRationale,
+                decision, approvedAmount, finalReport);
+    }
+
+    public LoanState withRisk(int score, String rationale) {
+        return new LoanState(rawApplication, applicantName, annualIncome, requestedAmount,
+                employmentStatus, creditHistoryYears, valid, validationErrors, score, rationale,
+                decision, approvedAmount, finalReport);
+    }
+
+    public LoanState withDecision(Decision decision, double approvedAmount) {
+        return new LoanState(rawApplication, applicantName, annualIncome, requestedAmount,
+                employmentStatus, creditHistoryYears, valid, validationErrors, riskScore, riskRationale,
+                decision, approvedAmount, finalReport);
+    }
+
+    public LoanState withReport(String report) {
+        return new LoanState(rawApplication, applicantName, annualIncome, requestedAmount,
+                employmentStatus, creditHistoryYears, valid, validationErrors, riskScore, riskRationale,
+                decision, approvedAmount, report);
+    }
+}
+```
+
+---
+
+## Pipeline steps
+
+### `pipeline/LoanPipelineStep.java`
+
+A tiny marker interface over `UnaryOperator<LoanState>`, mainly so Spring can inject an ordered
+`List<LoanPipelineStep>` and each step reads clearly in logs.
+
+```java
+package com.example.loanpipeline.pipeline;
+
+import com.example.loanpipeline.model.LoanState;
+
+public interface LoanPipelineStep {
+    LoanState apply(LoanState state);
+
+    default String name() {
+        return getClass().getSimpleName();
+    }
+}
+```
+
+### `pipeline/ExtractAndNormalizeStep.java`
+
+```java
+package com.example.loanpipeline.pipeline;
+
+import com.example.loanpipeline.model.LoanState;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.core.annotation.Order;
+import org.springframework.stereotype.Component;
+
+@Component
+@Order(1)
+public class ExtractAndNormalizeStep implements LoanPipelineStep {
+
+    private static final Logger log = LoggerFactory.getLogger(ExtractAndNormalizeStep.class);
+
+    @Override
+    public LoanState apply(LoanState state) {
+        log.info("STEP 1/5 - extract_and_normalize");
+        var raw = state.rawApplication();
+
+        String name = String.valueOf(raw.getOrDefault("name", "")).strip();
+        if (name.isEmpty()) {
+            name = "Unknown Applicant";
+        }
+
+        return state.withNormalization(
+                name,
+                toDouble(raw.get("annual_income")),
+                toDouble(raw.get("requested_amount")),
+                String.valueOf(raw.getOrDefault("employment_status", "unknown")).toLowerCase(),
+                toDouble(raw.get("credit_history_years"))
+        );
+    }
+
+    private double toDouble(Object value) {
+        if (value == null) {
+            return 0.0;
+        }
+        try {
+            return Double.parseDouble(String.valueOf(value));
+        } catch (NumberFormatException e) {
+            return 0.0;
+        }
+    }
+}
+```
+
+### `pipeline/ValidateApplicationStep.java`
+
+```java
+package com.example.loanpipeline.pipeline;
+
+import com.example.loanpipeline.model.LoanState;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.core.annotation.Order;
+import org.springframework.stereotype.Component;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
+
+@Component
+@Order(2)
+public class ValidateApplicationStep implements LoanPipelineStep {
+
+    private static final Logger log = LoggerFactory.getLogger(ValidateApplicationStep.class);
+    private static final Set<String> ALLOWED_EMPLOYMENT_STATUSES =
+            Set.of("employed", "self_employed", "unemployed");
+
+    @Override
+    public LoanState apply(LoanState state) {
+        log.info("STEP 2/5 - validate_application");
+        List<String> errors = new ArrayList<>();
+
+        if (state.annualIncome() == null || state.annualIncome() <= 0) {
+            errors.add("annual_income must be a positive number");
+        }
+        if (state.requestedAmount() == null || state.requestedAmount() <= 0) {
+            errors.add("requested_amount must be a positive number");
+        }
+        if (state.requestedAmount() != null && state.annualIncome() != null
+                && state.requestedAmount() > state.annualIncome() * 5) {
+            errors.add("requested_amount exceeds 5x annual income cap");
+        }
+        if (!ALLOWED_EMPLOYMENT_STATUSES.contains(state.employmentStatus())) {
+            errors.add("unrecognized employment_status: " + state.employmentStatus());
+        }
+
+        if (!errors.isEmpty()) {
+            log.warn("Validation failed: {}", errors);
+        }
+
+        return state.withValidation(errors.isEmpty(), List.copyOf(errors));
+    }
+}
+```
+
+### `pipeline/ScoreCreditRiskStep.java`
+
+```java
+package com.example.loanpipeline.pipeline;
+
+import com.example.loanpipeline.model.LoanState;
+import com.example.loanpipeline.model.RiskAssessment;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.core.annotation.Order;
+import org.springframework.stereotype.Component;
+
+@Component
+@Order(3)
+public class ScoreCreditRiskStep implements LoanPipelineStep {
+
+    private static final Logger log = LoggerFactory.getLogger(ScoreCreditRiskStep.class);
+
+    private static final String RISK_PROMPT = """
+            You are a credit risk analyst. Given this loan applicant data, assess the risk.
+
+            Applicant data:
+            - Annual income: {income}
+            - Requested amount: {amount}
+            - Employment status: {employment}
+            - Credit history (years): {history}
+            """;
+
+    private final ChatClient chatClient;
+
+    public ScoreCreditRiskStep(ChatClient.Builder chatClientBuilder) {
+        this.chatClient = chatClientBuilder.build();
+    }
+
+    @Override
+    public LoanState apply(LoanState state) {
+        log.info("STEP 3/5 - score_credit_risk");
+
+        // Skip the (costly) LLM call for applications that already failed validation.
+        if (!state.valid()) {
+            return state.withRisk(0, "Skipped - application failed validation.");
+        }
+
+        try {
+            RiskAssessment assessment = chatClient.prompt()
+                    .user(u -> u.text(RISK_PROMPT)
+                            .param("income", String.valueOf(state.annualIncome()))
+                            .param("amount", String.valueOf(state.requestedAmount()))
+                            .param("employment", state.employmentStatus())
+                            .param("history", String.valueOf(state.creditHistoryYears())))
+                    .call()
+                    .entity(RiskAssessment.class);
+
+            int clamped = Math.max(0, Math.min(100, assessment.riskScore()));
+            return state.withRisk(clamped, assessment.rationale());
+        } catch (Exception e) {
+            // Deliberately broad: never let an LLM/parsing failure crash the pipeline.
+            log.error("LLM risk scoring failed, falling back to manual review: {}", e.getMessage());
+            return state.withRisk(50, "Automated scoring unavailable; flagged for manual review.");
+        }
+    }
+}
+```
+
+> `chatClient.prompt().user(...).call().entity(RiskAssessment.class)` is Spring AI's structured
+> output support — it appends format instructions to the prompt and converts the model's JSON
+> response into `RiskAssessment` for you, replacing the Python version's manual
+> `json.loads(response.content)` + `try/except`.
+
+### `pipeline/MakeDecisionStep.java`
+
+```java
+package com.example.loanpipeline.pipeline;
+
+import com.example.loanpipeline.model.Decision;
+import com.example.loanpipeline.model.LoanState;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.core.annotation.Order;
+import org.springframework.stereotype.Component;
+
+@Component
+@Order(4)
+public class MakeDecisionStep implements LoanPipelineStep {
+
+    private static final Logger log = LoggerFactory.getLogger(MakeDecisionStep.class);
+
+    @Override
+    public LoanState apply(LoanState state) {
+        log.info("STEP 4/5 - make_decision");
+
+        if (!state.valid()) {
+            return state.withDecision(Decision.REJECTED, 0.0);
+        }
+
+        int score = state.riskScore() != null ? state.riskScore() : 0;
+        if (score >= 70) {
+            return state.withDecision(Decision.APPROVED, state.requestedAmount());
+        } else if (score >= 40) {
+            return state.withDecision(Decision.MANUAL_REVIEW, 0.0);
+        } else {
+            return state.withDecision(Decision.REJECTED, 0.0);
+        }
+    }
+}
+```
+
+### `pipeline/GenerateReportStep.java`
+
+```java
+package com.example.loanpipeline.pipeline;
+
+import com.example.loanpipeline.model.LoanState;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.core.annotation.Order;
+import org.springframework.stereotype.Component;
+
+@Component
+@Order(5)
+public class GenerateReportStep implements LoanPipelineStep {
+
+    private static final Logger log = LoggerFactory.getLogger(GenerateReportStep.class);
+
+    @Override
+    public LoanState apply(LoanState state) {
+        log.info("STEP 5/5 - generate_report");
+
+        StringBuilder report = new StringBuilder();
+        report.append("# Loan Application Report - ").append(state.applicantName()).append("\n\n");
+
+        if (!state.valid()) {
+            report.append("**Decision:** REJECTED (failed validation)\n\n")
+                    .append("**Issues found:**\n");
+            state.validationErrors().forEach(e -> report.append("- ").append(e).append("\n"));
+        } else {
+            report.append(String.format("**Requested amount:** $%,.2f%n", state.requestedAmount()))
+                    .append(String.format("**Annual income:** $%,.2f%n", state.annualIncome()))
+                    .append("**Risk score:** ").append(state.riskScore()).append("/100\n")
+                    .append("**Risk rationale:** ").append(state.riskRationale()).append("\n\n")
+                    .append("**Decision:** ").append(state.decision().name().replace('_', ' ')).append("\n");
+
+            if (state.decision().name().equals("APPROVED")) {
+                report.append(String.format("**Approved amount:** $%,.2f%n", state.approvedAmount()));
+            }
+        }
+
+        return state.withReport(report.toString());
+    }
+}
+```
+
+### `pipeline/LoanPipelineService.java`
+
+The linear chain itself — the direct analogue of `graph.add_edge(...)` × 4 and `app.invoke(...)`.
+
+```java
+package com.example.loanpipeline.pipeline;
+
+import com.example.loanpipeline.model.LoanState;
+import org.springframework.stereotype.Service;
+
+import java.util.List;
+import java.util.Map;
+
+@Service
+public class LoanPipelineService {
+
+    private final List<LoanPipelineStep> steps;
+
+    // Spring injects this list already ordered by each step's @Order value,
+    // giving us START -> A -> B -> C -> D -> E -> END with no graph object needed.
+    public LoanPipelineService(List<LoanPipelineStep> steps) {
+        this.steps = steps;
+    }
+
+    public LoanState process(Map<String, Object> rawApplication) {
+        LoanState state = LoanState.initial(rawApplication);
+        for (LoanPipelineStep step : steps) {
+            state = step.apply(state);
+        }
+        return state;
+    }
+}
+```
+
+---
+
+## Entry points
+
+### `web/LoanController.java`
+
+```java
+package com.example.loanpipeline.web;
+
+import com.example.loanpipeline.model.LoanState;
+import com.example.loanpipeline.pipeline.LoanPipelineService;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.Map;
+
+@RestController
+public class LoanController {
+
+    private final LoanPipelineService loanPipelineService;
+
+    public LoanController(LoanPipelineService loanPipelineService) {
+        this.loanPipelineService = loanPipelineService;
+    }
+
+    @PostMapping("/api/loan-applications")
+    public LoanState submit(@RequestBody Map<String, Object> rawApplication) {
+        return loanPipelineService.process(rawApplication);
+    }
+}
+```
+
+### `LoanPipelineRunner.java` (CLI demo, mirrors the Python `if __name__ == "__main__"` block)
+
+```java
+package com.example.loanpipeline;
+
+import com.example.loanpipeline.pipeline.LoanPipelineService;
+import org.springframework.boot.CommandLineRunner;
+import org.springframework.context.annotation.Profile;
+import org.springframework.stereotype.Component;
+
+import java.util.Map;
+
+@Component
+@Profile("demo")
+public class LoanPipelineRunner implements CommandLineRunner {
+
+    private final LoanPipelineService loanPipelineService;
+
+    public LoanPipelineRunner(LoanPipelineService loanPipelineService) {
+        this.loanPipelineService = loanPipelineService;
+    }
+
+    @Override
+    public void run(String... args) {
+        Map<String, Object> sampleApplication = Map.of(
+                "name", "Jordan Reyes",
+                "annual_income", "82000",
+                "requested_amount", "25000",
+                "employment_status", "Employed",
+                "credit_history_years", "6"
+        );
+
+        var result = loanPipelineService.process(sampleApplication);
+        System.out.println(result.finalReport());
+    }
+}
+```
+
+### `LoanPipelineApplication.java`
+
+```java
+package com.example.loanpipeline;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class LoanPipelineApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(LoanPipelineApplication.class, args);
+    }
+}
+```
+
+---
+
+## Running it
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+
+# CLI demo (prints the report, like the Python script)
+mvn spring-boot:run -Dspring-boot.run.profiles=demo
+
+# Or as a service
+mvn spring-boot:run
+curl -X POST localhost:8080/api/loan-applications \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Jordan Reyes","annual_income":"82000","requested_amount":"25000","employment_status":"Employed","credit_history_years":"6"}'
+```
+
+## Notes on the port
+
+- **State shape**: `LoanState` stays a single record flowing through every step, same as the
+  Pydantic model — but each step returns a *new* instance rather than mutating fields, so there's
+  no risk of a later step accidentally reading a half-updated object.
+- **Ordering**: `@Order(1..5)` on each step plus Spring injecting `List<LoanPipelineStep>` gives
+  you the same guaranteed linear order as the explicit `add_edge` chain, without a graph object.
+  If this pipeline ever needs branching or retries, that's the point where reaching for a real
+  graph/orchestration layer (Spring AI's own agent/workflow support, or a dedicated library) would
+  start paying for itself.
+- **Structured LLM output**: `.call().entity(RiskAssessment.class)` replaces the manual
+  `json.loads` + `try/except` block — Spring AI handles the format instructions and JSON→object
+  conversion, and any parsing failure still falls through to the same "manual review" fallback.
+- **Versions**: pin these three together — Spring AI 2.0.0 requires Spring Boot 4.x
+  (Spring Framework 7), and Spring Boot 4.x targets Java 17+ with first-class support for Java 25.
