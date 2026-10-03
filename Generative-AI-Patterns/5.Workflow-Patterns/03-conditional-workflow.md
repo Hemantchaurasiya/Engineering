@@ -368,3 +368,568 @@ if __name__ == "__main__":
 ---
 
 ⬅ [2. Parallel Workflow](02-parallel-workflow.md) | [Back to index](README.md) | Next: [4. Branching](04-branching.md) ➡
+
+# Order Fraud Check — Conditional Workflow (Java + Spring AI)
+
+A Java port of the LangGraph conditional-routing workflow (`assess_risk -> route_by_risk ->
+exactly one of {auto_approve, manual_review, auto_decline} -> END`), built on:
+
+- **Java 25** (current LTS) — using a `sealed` interface + `switch` pattern matching for the router
+- **Spring Boot 4.1.0**
+- **Spring AI 2.0.0** (GA) with the **Ollama** starter, mirroring `llama3.1:8b`
+
+## Mapping the shape
+
+The Python version's `graph.add_conditional_edges("assess_risk", route_by_risk, {...})` reads
+state and returns the *name* of the next node as a string, which LangGraph then looks up in a
+dict. Java has a more direct way to express "exactly one of a fixed set of branches, chosen by
+value": a `sealed` interface with one implementation per branch, selected with an exhaustive
+`switch` — the compiler guarantees every `RiskLevel` is handled, which the Python string-keyed
+dict can't guarantee.
+
+| LangGraph concept | Spring / Java equivalent |
+|---|---|
+| `Literal["low", "medium", "high"]` | `enum RiskLevel { LOW, MEDIUM, HIGH }` |
+| `assess_risk` node | `RiskAssessmentStep` (calls the LLM, parses the two-line reply) |
+| `route_by_risk(state) -> str` | `OrderFraudCheckService` `switch (state.riskLevel())` |
+| `add_conditional_edges(..., {"auto_approve": ..., ...})` | `sealed interface OutcomeBranch` with `AutoApprove`, `ManualReview`, `AutoDecline` implementations |
+| All three branches → `END` | All three branches return the same `OrderState` shape |
+
+Because Java's `switch` over a `sealed`/`enum` type must be exhaustive, there's no way to forget
+a branch or silently fall through to nothing — the equivalent of LangGraph's dict-based routing
+table, but checked at compile time instead of at graph-build time.
+
+---
+
+## Project structure
+
+```
+order-fraud-check/
+├── pom.xml
+└── src/main/java/com/example/orderfraud/
+    ├── OrderFraudCheckApplication.java
+    ├── model/
+    │   ├── Order.java
+    │   ├── OrderState.java
+    │   └── RiskLevel.java
+    ├── pipeline/
+    │   ├── RiskAssessmentStep.java
+    │   ├── OutcomeBranch.java
+    │   ├── AutoApproveBranch.java
+    │   ├── ManualReviewBranch.java
+    │   ├── AutoDeclineBranch.java
+    │   └── OrderFraudCheckService.java
+    ├── web/
+    │   └── OrderFraudCheckController.java
+    └── OrderFraudCheckRunner.java   (CLI demo, mirrors the Python __main__ block)
+└── src/main/resources/
+    └── application.yml
+```
+
+---
+
+## `pom.xml`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.example</groupId>
+    <artifactId>order-fraud-check</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+
+    <properties>
+        <java.version>25</java.version>
+        <spring-ai.version>2.0.0</spring-ai.version>
+    </properties>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.0</version>
+        <relativePath/>
+    </parent>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <!-- Ollama model starter — local llama3.1:8b, same as langchain-ollama -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-ollama</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+```
+
+## `src/main/resources/application.yml`
+
+```yaml
+spring:
+  application:
+    name: order-fraud-check
+  ai:
+    ollama:
+      base-url: http://localhost:11434
+      chat:
+        options:
+          model: llama3.1:8b
+          temperature: 0.0
+
+logging:
+  level:
+    com.example.orderfraud: INFO
+```
+
+---
+
+## Domain model
+
+### `model/RiskLevel.java`
+
+```java
+package com.example.orderfraud.model;
+
+public enum RiskLevel {
+    LOW,
+    MEDIUM,
+    HIGH
+}
+```
+
+### `model/Order.java`
+
+The raw input, equivalent to the dict passed into `OrderState(**order)`.
+
+```java
+package com.example.orderfraud.model;
+
+public record Order(
+        String orderId,
+        double orderAmount,
+        int customerAccountAgeDays,
+        String shippingCountry,
+        String billingCountry
+) {}
+```
+
+### `model/OrderState.java`
+
+```java
+package com.example.orderfraud.model;
+
+public record OrderState(
+        Order order,
+        RiskLevel riskLevel,
+        String riskRationale,
+        String outcomeSummary
+) {
+
+    public static OrderState initial(Order order) {
+        return new OrderState(order, null, null, null);
+    }
+
+    public OrderState withRisk(RiskLevel riskLevel, String rationale) {
+        return new OrderState(order, riskLevel, rationale, outcomeSummary);
+    }
+
+    public OrderState withOutcome(String summary) {
+        return new OrderState(order, riskLevel, riskRationale, summary);
+    }
+}
+```
+
+---
+
+## The decision-producing step
+
+### `pipeline/RiskAssessmentStep.java`
+
+Equivalent to the Python `assess_risk` node — calls the model, then parses its two-line reply
+into a `RiskLevel` with the same "anything unclear defaults to medium, never to an automatic
+approval or decline" safety rule.
+
+```java
+package com.example.orderfraud.pipeline;
+
+import com.example.orderfraud.model.Order;
+import com.example.orderfraud.model.OrderState;
+import com.example.orderfraud.model.RiskLevel;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.stereotype.Component;
+
+import java.util.Locale;
+
+@Component
+public class RiskAssessmentStep {
+
+    private static final Logger log = LoggerFactory.getLogger(RiskAssessmentStep.class);
+
+    private static final String RISK_PROMPT = """
+            You are a fraud analyst. Classify this order's fraud risk.
+            Respond with ONLY one word on the first line: low, medium, or high.
+            On the second line, give a one-sentence reason.
+
+            Order details:
+            - Amount: ${amount}
+            - Customer account age: {age} days
+            - Shipping country: {shippingCountry}
+            - Billing country: {billingCountry}
+            """;
+
+    private final ChatClient chatClient;
+
+    public RiskAssessmentStep(ChatClient.Builder chatClientBuilder) {
+        this.chatClient = chatClientBuilder.build();
+    }
+
+    public OrderState apply(OrderState state) {
+        Order order = state.order();
+        log.info("STEP - assess_risk for order {}", order.orderId());
+
+        try {
+            String content = chatClient.prompt()
+                    .user(u -> u.text(RISK_PROMPT)
+                            .param("amount", String.format(Locale.US, "%,.2f", order.orderAmount()))
+                            .param("age", String.valueOf(order.customerAccountAgeDays()))
+                            .param("shippingCountry", order.shippingCountry())
+                            .param("billingCountry", order.billingCountry()))
+                    .call()
+                    .content();
+
+            var lines = content.strip().lines().map(String::strip).filter(l -> !l.isEmpty()).toList();
+            String firstWord = lines.isEmpty() ? "" : lines.get(0).toLowerCase(Locale.ROOT);
+            String rationale = lines.size() > 1 ? lines.get(1) : "No rationale provided.";
+
+            RiskLevel level;
+            if (firstWord.contains("high")) {
+                level = RiskLevel.HIGH;
+            } else if (firstWord.contains("low")) {
+                level = RiskLevel.LOW;
+            } else {
+                // Anything unclear (including "medium" or a malformed reply) safely
+                // defaults to MEDIUM -> routes to a human, never to an automatic
+                // approval or an automatic decline.
+                level = RiskLevel.MEDIUM;
+            }
+
+            return state.withRisk(level, rationale);
+        } catch (Exception e) {
+            // Never let a flaky model call crash the pipeline.
+            log.error("Risk assessment failed, defaulting to manual review: {}", e.getMessage());
+            return state.withRisk(RiskLevel.MEDIUM,
+                    "Automated assessment unavailable; routed to manual review.");
+        }
+    }
+}
+```
+
+---
+
+## The branches
+
+### `pipeline/OutcomeBranch.java`
+
+A `sealed` interface standing in for the `{"auto_approve": ..., "manual_review": ...,
+"auto_decline": ...}` routing table — every implementation is known and enumerable, which is
+what lets the router below be checked exhaustively by the compiler.
+
+```java
+package com.example.orderfraud.pipeline;
+
+import com.example.orderfraud.model.OrderState;
+
+public sealed interface OutcomeBranch
+        permits AutoApproveBranch, ManualReviewBranch, AutoDeclineBranch {
+    OrderState apply(OrderState state);
+}
+```
+
+### `pipeline/AutoApproveBranch.java`
+
+```java
+package com.example.orderfraud.pipeline;
+
+import com.example.orderfraud.model.OrderState;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+
+@Component
+public final class AutoApproveBranch implements OutcomeBranch {
+
+    private static final Logger log = LoggerFactory.getLogger(AutoApproveBranch.class);
+
+    @Override
+    public OrderState apply(OrderState state) {
+        log.info("BRANCH - auto_approve for order {}", state.order().orderId());
+        // In production: call the payment gateway to charge the card,
+        // then call the fulfillment service to queue shipping.
+        // paymentGateway.charge(state.order().orderId(), state.order().orderAmount());
+        // fulfillment.queueForShipping(state.order().orderId());
+        String summary = "Order %s AUTO-APPROVED (risk: low). Card charged, order queued for shipping."
+                .formatted(state.order().orderId());
+        return state.withOutcome(summary);
+    }
+}
+```
+
+### `pipeline/ManualReviewBranch.java`
+
+```java
+package com.example.orderfraud.pipeline;
+
+import com.example.orderfraud.model.OrderState;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+
+@Component
+public final class ManualReviewBranch implements OutcomeBranch {
+
+    private static final Logger log = LoggerFactory.getLogger(ManualReviewBranch.class);
+
+    @Override
+    public OrderState apply(OrderState state) {
+        log.info("BRANCH - manual_review for order {}", state.order().orderId());
+        // In production: write a row to the review-queue table/service with
+        // the risk rationale attached so an analyst can act on it.
+        // reviewQueue.enqueue(state.order().orderId(), state.riskRationale());
+        String summary = "Order %s HELD FOR MANUAL REVIEW (risk: medium). Reason: %s"
+                .formatted(state.order().orderId(), state.riskRationale());
+        return state.withOutcome(summary);
+    }
+}
+```
+
+### `pipeline/AutoDeclineBranch.java`
+
+```java
+package com.example.orderfraud.pipeline;
+
+import com.example.orderfraud.model.OrderState;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+
+@Component
+public final class AutoDeclineBranch implements OutcomeBranch {
+
+    private static final Logger log = LoggerFactory.getLogger(AutoDeclineBranch.class);
+
+    @Override
+    public OrderState apply(OrderState state) {
+        log.info("BRANCH - auto_decline for order {}", state.order().orderId());
+        // In production: release any payment authorization hold and
+        // send the customer a decline notification email.
+        // paymentGateway.releaseHold(state.order().orderId());
+        // notifications.sendDeclineEmail(state.order().orderId());
+        String summary = "Order %s AUTO-DECLINED (risk: high). Reason: %s"
+                .formatted(state.order().orderId(), state.riskRationale());
+        return state.withOutcome(summary);
+    }
+}
+```
+
+### `pipeline/OrderFraudCheckService.java`
+
+The router itself — the direct analogue of `route_by_risk` plus `add_conditional_edges`.
+
+```java
+package com.example.orderfraud.pipeline;
+
+import com.example.orderfraud.model.Order;
+import com.example.orderfraud.model.OrderState;
+import org.springframework.stereotype.Service;
+
+@Service
+public class OrderFraudCheckService {
+
+    private final RiskAssessmentStep riskAssessmentStep;
+    private final AutoApproveBranch autoApproveBranch;
+    private final ManualReviewBranch manualReviewBranch;
+    private final AutoDeclineBranch autoDeclineBranch;
+
+    public OrderFraudCheckService(RiskAssessmentStep riskAssessmentStep,
+                                   AutoApproveBranch autoApproveBranch,
+                                   ManualReviewBranch manualReviewBranch,
+                                   AutoDeclineBranch autoDeclineBranch) {
+        this.riskAssessmentStep = riskAssessmentStep;
+        this.autoApproveBranch = autoApproveBranch;
+        this.manualReviewBranch = manualReviewBranch;
+        this.autoDeclineBranch = autoDeclineBranch;
+    }
+
+    public OrderState check(Order order) {
+        OrderState afterAssessment = riskAssessmentStep.apply(OrderState.initial(order));
+
+        // The conditional edge: exactly one branch runs, chosen by risk_level.
+        // The switch is exhaustive over RiskLevel, so there's no "unhandled route"
+        // failure mode the way a missing dict key would be in the Python version.
+        OutcomeBranch branch = switch (afterAssessment.riskLevel()) {
+            case LOW -> autoApproveBranch;
+            case MEDIUM -> manualReviewBranch;
+            case HIGH -> autoDeclineBranch;
+        };
+
+        return branch.apply(afterAssessment);
+    }
+}
+```
+
+---
+
+## Entry points
+
+### `web/OrderFraudCheckController.java`
+
+```java
+package com.example.orderfraud.web;
+
+import com.example.orderfraud.model.Order;
+import com.example.orderfraud.model.OrderState;
+import com.example.orderfraud.pipeline.OrderFraudCheckService;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+public class OrderFraudCheckController {
+
+    private final OrderFraudCheckService orderFraudCheckService;
+
+    public OrderFraudCheckController(OrderFraudCheckService orderFraudCheckService) {
+        this.orderFraudCheckService = orderFraudCheckService;
+    }
+
+    @PostMapping("/api/orders/fraud-check")
+    public OrderState check(@RequestBody Order order) {
+        return orderFraudCheckService.check(order);
+    }
+}
+```
+
+### `OrderFraudCheckRunner.java` (CLI demo, mirrors the Python `if __name__ == "__main__"` block)
+
+```java
+package com.example.orderfraud;
+
+import com.example.orderfraud.model.Order;
+import com.example.orderfraud.pipeline.OrderFraudCheckService;
+import org.springframework.boot.CommandLineRunner;
+import org.springframework.context.annotation.Profile;
+import org.springframework.stereotype.Component;
+
+import java.util.List;
+
+@Component
+@Profile("demo")
+public class OrderFraudCheckRunner implements CommandLineRunner {
+
+    private final OrderFraudCheckService orderFraudCheckService;
+
+    public OrderFraudCheckRunner(OrderFraudCheckService orderFraudCheckService) {
+        this.orderFraudCheckService = orderFraudCheckService;
+    }
+
+    @Override
+    public void run(String... args) {
+        List<Order> sampleOrders = List.of(
+                new Order("ORD-1001", 45.00, 730, "US", "US"),
+                new Order("ORD-1002", 2800.00, 1, "US", "RO")
+        );
+
+        for (Order order : sampleOrders) {
+            var result = orderFraudCheckService.check(order);
+            System.out.println(result.outcomeSummary());
+        }
+    }
+}
+```
+
+### `OrderFraudCheckApplication.java`
+
+```java
+package com.example.orderfraud;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class OrderFraudCheckApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(OrderFraudCheckApplication.class, args);
+    }
+}
+```
+
+---
+
+## Running it
+
+```bash
+ollama pull llama3.1:8b
+ollama serve   # if not already running
+
+# CLI demo (prints both sample outcomes, like the Python script)
+mvn spring-boot:run -Dspring-boot.run.profiles=demo
+
+# Or as a service
+mvn spring-boot:run
+curl -X POST localhost:8080/api/orders/fraud-check \
+  -H "Content-Type: application/json" \
+  -d '{"orderId":"ORD-1002","orderAmount":2800.00,"customerAccountAgeDays":1,"shippingCountry":"US","billingCountry":"RO"}'
+```
+
+## Notes on the port
+
+- **Routing table → sealed interface**: LangGraph's `{"auto_approve": "auto_approve", ...}` dict
+  maps a string to a node name that's resolved at graph-build time. The `sealed OutcomeBranch`
+  interface plus an exhaustive `switch (riskLevel) { case LOW -> ...; ... }` gets the same
+  one-branch-only guarantee, but the compiler — not a runtime dict lookup — verifies every
+  `RiskLevel` has a handler, and adding a new `RiskLevel` value forces a compile error at the
+  `switch` until it's handled.
+- **Safe-default parsing preserved exactly**: the "unclear or malformed model reply defaults to
+  `MEDIUM`, never to an automatic approval or decline" rule from `assess_risk` is kept verbatim —
+  this is the one place where changing behavior would matter for a fraud-review system, so it's
+  a direct line-for-line translation rather than a redesign.
+- **Convergent branches**: all three `OutcomeBranch` implementations return the same `OrderState`
+  shape, matching the Python graph where `auto_approve`, `manual_review`, and `auto_decline` all
+  flow to the same `END`.
+- **Versions**: same Ollama-backed `spring-ai-starter-model-ollama` setup as the parallel
+  contract-review port — point `spring.ai.ollama.base-url` at your local Ollama instance running
+  `llama3.1:8b`.
