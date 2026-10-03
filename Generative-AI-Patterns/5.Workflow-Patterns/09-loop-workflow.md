@@ -325,3 +325,552 @@ if __name__ == "__main__":
 ---
 
 ⬅ [8. Iterative Workflow](08-iterative-workflow.md) | [Back to index](README.md) | Next: [10. Retry Pattern](10-retry-pattern.md) ➡
+
+# Paginated Transaction Sync — Self-Loop Workflow (Java + Spring AI)
+
+A Java port of the LangGraph self-loop workflow — one node (`fetch_page`) loops back into itself
+until an external condition (no more pages) says stop, with a safety cap as a backstop against
+infinite looping. Built on:
+
+- **Java 25** (current LTS)
+- **Spring Boot 4.1.0**
+- **Spring AI 2.0.0** (GA) with the **Ollama** starter, mirroring `llama3.1:8b`
+
+## Mapping the shape
+
+Like the ad-copy generator's `generate -> critique -> revise -> critique -> ...` loop, this is a
+**self-loop**: `fetch_page`'s own conditional edge can route back to itself. The exit condition
+here has two independent parts worth keeping distinct, exactly as the Python version does:
+"is there more data?" (`cursor != null`) and "are we still under the safety cap?"
+(`pageCount < maxPages`) — and the specific behavior when the cap is hit *while data remains* is
+a deliberate early-stop, logged as a warning, not an error.
+
+| LangGraph concept | Spring / Java equivalent |
+|---|---|
+| `fetch_page` (the node that loops) | `TransactionPageFetchStep.fetchPage(...)`, called inside a `while` loop |
+| `_call_paginated_api(merchant_id, cursor)` | `PaginatedTransactionApiClient.fetchPage(...)` |
+| `should_continue(state) -> str` | The `while` loop's condition, checked in the same two-part order |
+| Self-loop edge `fetch_page -> fetch_page` | The `while` loop simply iterating again |
+| `summarize_sync` (runs once, after the loop) | `SyncSummaryStep.summarize(...)`, called once after the loop exits |
+| `state.all_transactions + transactions` (list append per page) | `allTransactions.addAll(transactions)` on a local `List` |
+
+---
+
+## Project structure
+
+```
+transaction-sync/
+├── pom.xml
+└── src/main/java/com/example/transactionsync/
+    ├── TransactionSyncApplication.java
+    ├── model/
+    │   ├── Transaction.java
+    │   ├── TransactionPage.java
+    │   └── SyncResult.java
+    ├── pipeline/
+    │   ├── PaginatedTransactionApiClient.java
+    │   ├── TransactionPageFetchStep.java
+    │   ├── SyncSummaryStep.java
+    │   └── TransactionSyncService.java
+    ├── web/
+    │   └── TransactionSyncController.java
+    └── TransactionSyncRunner.java   (CLI demo, mirrors the Python __main__ block)
+└── src/main/resources/
+    └── application.yml
+```
+
+---
+
+## `pom.xml`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.example</groupId>
+    <artifactId>transaction-sync</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+
+    <properties>
+        <java.version>25</java.version>
+        <spring-ai.version>2.0.0</spring-ai.version>
+    </properties>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.0</version>
+        <relativePath/>
+    </parent>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <!-- Ollama model starter — local llama3.1:8b, same as langchain-ollama -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-ollama</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+```
+
+## `src/main/resources/application.yml`
+
+```yaml
+spring:
+  application:
+    name: transaction-sync
+  ai:
+    ollama:
+      base-url: http://localhost:11434
+      chat:
+        options:
+          model: llama3.1:8b
+          temperature: 0.0
+
+logging:
+  level:
+    com.example.transactionsync: INFO
+```
+
+---
+
+## Domain model
+
+### `model/Transaction.java`
+
+```java
+package com.example.transactionsync.model;
+
+public record Transaction(String id, double amount) {}
+```
+
+### `model/TransactionPage.java`
+
+The two-value return of `_call_paginated_api` (`transactions`, `next_cursor`) becomes one small
+record rather than a Python tuple.
+
+```java
+package com.example.transactionsync.model;
+
+import java.util.List;
+
+public record TransactionPage(List<Transaction> transactions, String nextCursor) {}
+```
+
+### `model/SyncResult.java`
+
+```java
+package com.example.transactionsync.model;
+
+public record SyncResult(int pageCount, int transactionCount, double totalAmount, String summary) {}
+```
+
+There's no `SyncState` record carrying `cursor`/`pageCount`/`allTransactions` through the whole
+run the way the Python `SyncState` does — as with the ad-copy loop, the loop's working variables
+live as locals inside `TransactionSyncService.sync`, since only that one method needs to see them
+change from iteration to iteration.
+
+---
+
+## Simulated paginated API
+
+### `pipeline/PaginatedTransactionApiClient.java`
+
+In production this would be a real HTTP call to the payment processor — kept as a deterministic
+simulation here, exactly matching the Python version's fake 4-page dataset.
+
+```java
+package com.example.transactionsync.pipeline;
+
+import com.example.transactionsync.model.Transaction;
+import com.example.transactionsync.model.TransactionPage;
+import org.springframework.stereotype.Component;
+
+import java.util.ArrayList;
+import java.util.List;
+
+@Component
+public class PaginatedTransactionApiClient {
+
+    public TransactionPage fetchPage(String merchantId, String cursor) {
+        int pageNumber = cursor != null ? Integer.parseInt(cursor) : 1;
+        if (pageNumber > 4) {
+            return new TransactionPage(List.of(), null); // no more pages
+        }
+
+        List<Transaction> transactions = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            transactions.add(new Transaction(
+                    "%s-txn-%d-%d".formatted(merchantId, pageNumber, i),
+                    10.0 * pageNumber + i));
+        }
+
+        String nextCursor = pageNumber < 4 ? String.valueOf(pageNumber + 1) : null;
+        return new TransactionPage(transactions, nextCursor);
+    }
+}
+```
+
+---
+
+## The loop body
+
+### `pipeline/TransactionPageFetchStep.java`
+
+The node that loops — each call handles exactly one page, same as `fetch_page`.
+
+```java
+package com.example.transactionsync.pipeline;
+
+import com.example.transactionsync.model.TransactionPage;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+
+import java.util.List;
+
+@Component
+public class TransactionPageFetchStep {
+
+    private static final Logger log = LoggerFactory.getLogger(TransactionPageFetchStep.class);
+
+    private final PaginatedTransactionApiClient apiClient;
+
+    public TransactionPageFetchStep(PaginatedTransactionApiClient apiClient) {
+        this.apiClient = apiClient;
+    }
+
+    public TransactionPage fetchPage(String merchantId, String cursor, int pageCount) {
+        log.info("LOOP - fetching page {} (cursor={})", pageCount + 1, cursor);
+        try {
+            return apiClient.fetchPage(merchantId, cursor);
+        } catch (Exception e) {
+            // On a real API error, stop looping rather than retrying forever; a dedicated
+            // Retry Pattern would add bounded retries around just this call.
+            log.error("Page fetch failed, stopping loop here: {}", e.getMessage());
+            return new TransactionPage(List.of(), null);
+        }
+    }
+}
+```
+
+---
+
+## The one-shot summary
+
+### `pipeline/SyncSummaryStep.java`
+
+Runs exactly once, after the loop ends — the direct analogue of `summarize_sync`.
+
+```java
+package com.example.transactionsync.pipeline;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.stereotype.Component;
+
+import java.util.Locale;
+
+@Component
+public class SyncSummaryStep {
+
+    private static final Logger log = LoggerFactory.getLogger(SyncSummaryStep.class);
+
+    private static final String SUMMARY_PROMPT = """
+            Write one short sentence summarizing this data sync for an operations dashboard.
+
+            Merchant: {merchantId}
+            Pages fetched: {pageCount}
+            Total transactions: {txnCount}
+            Total amount: ${totalAmount}
+            """;
+
+    private final ChatClient chatClient;
+
+    public SyncSummaryStep(ChatClient.Builder chatClientBuilder) {
+        this.chatClient = chatClientBuilder.build();
+    }
+
+    public String summarize(String merchantId, int pageCount, int txnCount, double totalAmount) {
+        log.info("LOOP COMPLETE - {} pages, {} transactions", pageCount, txnCount);
+        try {
+            return chatClient.prompt()
+                    .user(u -> u.text(SUMMARY_PROMPT)
+                            .param("merchantId", merchantId)
+                            .param("pageCount", String.valueOf(pageCount))
+                            .param("txnCount", String.valueOf(txnCount))
+                            .param("totalAmount", String.format(Locale.US, "%,.2f", totalAmount)))
+                    .call()
+                    .content()
+                    .strip();
+        } catch (Exception e) {
+            log.error("summarize_sync LLM call failed: {}", e.getMessage());
+            return "Synced %d transactions ($%,.2f) across %d pages."
+                    .formatted(txnCount, totalAmount, pageCount);
+        }
+    }
+}
+```
+
+---
+
+## The loop itself
+
+### `pipeline/TransactionSyncService.java`
+
+The `while` loop is the self-loop edge; its condition preserves the Python router's two-part
+check — continue only while there's a next cursor **and** we're under the safety cap — including
+the specific warning log when the cap cuts off a sync that still had data remaining.
+
+```java
+package com.example.transactionsync.pipeline;
+
+import com.example.transactionsync.model.SyncResult;
+import com.example.transactionsync.model.Transaction;
+import com.example.transactionsync.model.TransactionPage;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+
+import java.util.ArrayList;
+import java.util.List;
+
+@Service
+public class TransactionSyncService {
+
+    private static final Logger log = LoggerFactory.getLogger(TransactionSyncService.class);
+
+    private final TransactionPageFetchStep transactionPageFetchStep;
+    private final SyncSummaryStep syncSummaryStep;
+
+    public TransactionSyncService(TransactionPageFetchStep transactionPageFetchStep,
+                                   SyncSummaryStep syncSummaryStep) {
+        this.transactionPageFetchStep = transactionPageFetchStep;
+        this.syncSummaryStep = syncSummaryStep;
+    }
+
+    public SyncResult sync(String merchantId, int maxPages) {
+        List<Transaction> allTransactions = new ArrayList<>();
+        String cursor = null;
+        int pageCount = 0;
+
+        // should_continue, in the same order: keep going only while there's a next
+        // cursor AND we're under the safety cap.
+        while (cursor != null || pageCount == 0) {
+            if (pageCount > 0 && (cursor == null || pageCount >= maxPages)) {
+                break;
+            }
+
+            TransactionPage page = transactionPageFetchStep.fetchPage(merchantId, cursor, pageCount);
+            allTransactions.addAll(page.transactions());
+            cursor = page.nextCursor();
+            pageCount++;
+
+            if (pageCount >= maxPages && cursor != null) {
+                log.warn("Safety cap of {} pages reached with more data remaining - stopping early",
+                        maxPages);
+                cursor = null; // force loop exit, mirroring should_continue's early return
+            }
+        }
+
+        double totalAmount = allTransactions.stream().mapToDouble(Transaction::amount).sum();
+        String summary = syncSummaryStep.summarize(merchantId, pageCount, allTransactions.size(), totalAmount);
+
+        return new SyncResult(pageCount, allTransactions.size(), totalAmount, summary);
+    }
+}
+```
+
+> The loop condition above is written to match `should_continue` exactly, including its exact
+> exit point on hitting the cap. If you find the `while (cursor != null || pageCount == 0) { if
+> (...) break; ... }` shape harder to read than the Python version's separate routing function,
+> a `do { ... } while (cursor != null && pageCount < maxPages)` reads more naturally in Java and
+> is equivalent — shown as an alternative below.
+
+<details>
+<summary>Equivalent, more idiomatic Java loop shape</summary>
+
+```java
+public SyncResult sync(String merchantId, int maxPages) {
+    List<Transaction> allTransactions = new ArrayList<>();
+    String cursor = null;
+    int pageCount = 0;
+    boolean cappedWithDataRemaining = false;
+
+    do {
+        TransactionPage page = transactionPageFetchStep.fetchPage(merchantId, cursor, pageCount);
+        allTransactions.addAll(page.transactions());
+        cursor = page.nextCursor();
+        pageCount++;
+
+        if (pageCount >= maxPages && cursor != null) {
+            cappedWithDataRemaining = true;
+            break;
+        }
+    } while (cursor != null);
+
+    if (cappedWithDataRemaining) {
+        log.warn("Safety cap of {} pages reached with more data remaining - stopping early", maxPages);
+    }
+
+    double totalAmount = allTransactions.stream().mapToDouble(Transaction::amount).sum();
+    String summary = syncSummaryStep.summarize(merchantId, pageCount, allTransactions.size(), totalAmount);
+    return new SyncResult(pageCount, allTransactions.size(), totalAmount, summary);
+}
+```
+
+</details>
+
+---
+
+## Entry points
+
+### `web/TransactionSyncController.java`
+
+```java
+package com.example.transactionsync.web;
+
+import com.example.transactionsync.model.SyncResult;
+import com.example.transactionsync.pipeline.TransactionSyncService;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+public class TransactionSyncController {
+
+    private final TransactionSyncService transactionSyncService;
+
+    public TransactionSyncController(TransactionSyncService transactionSyncService) {
+        this.transactionSyncService = transactionSyncService;
+    }
+
+    @GetMapping("/api/merchants/{merchantId}/sync")
+    public SyncResult sync(@PathVariable String merchantId,
+                            @RequestParam(defaultValue = "20") int maxPages) {
+        return transactionSyncService.sync(merchantId, maxPages);
+    }
+}
+```
+
+### `TransactionSyncRunner.java` (CLI demo, mirrors the Python `if __name__ == "__main__"` block)
+
+```java
+package com.example.transactionsync;
+
+import com.example.transactionsync.pipeline.TransactionSyncService;
+import org.springframework.boot.CommandLineRunner;
+import org.springframework.context.annotation.Profile;
+import org.springframework.stereotype.Component;
+
+@Component
+@Profile("demo")
+public class TransactionSyncRunner implements CommandLineRunner {
+
+    private final TransactionSyncService transactionSyncService;
+
+    public TransactionSyncRunner(TransactionSyncService transactionSyncService) {
+        this.transactionSyncService = transactionSyncService;
+    }
+
+    @Override
+    public void run(String... args) {
+        var result = transactionSyncService.sync("MERCHANT-882", 20);
+        System.out.println("Pages fetched: " + result.pageCount());
+        System.out.println("Transactions collected: " + result.transactionCount());
+        System.out.println("Summary: " + result.summary());
+    }
+}
+```
+
+### `TransactionSyncApplication.java`
+
+```java
+package com.example.transactionsync;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class TransactionSyncApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(TransactionSyncApplication.class, args);
+    }
+}
+```
+
+---
+
+## Running it
+
+```bash
+ollama pull llama3.1:8b
+ollama serve   # if not already running
+
+# CLI demo (prints pages/transactions/summary, like the Python script)
+mvn spring-boot:run -Dspring-boot.run.profiles=demo
+
+# Or as a service
+mvn spring-boot:run
+curl "localhost:8080/api/merchants/MERCHANT-882/sync?maxPages=20"
+
+# Try a low cap to see the early-stop warning path (the demo data has 4 pages)
+curl "localhost:8080/api/merchants/MERCHANT-882/sync?maxPages=2"
+```
+
+## Notes on the port
+
+- **Self-loop → `while`/`do-while` loop**: as with the ad-copy generator's loop, `fetch_page`
+  routing back to itself needs no graph machinery in Java — the "idiomatic" variant above using
+  `do { ... } while (cursor != null && pageCount < maxPages)` is arguably a cleaner read than the
+  literal translation, and both are included so you can pick based on how closely you want the
+  code to mirror `should_continue`'s exact control flow versus how naturally it reads as Java.
+- **Two-part exit condition kept distinct**: "is there more data" and "are we under the cap" stay
+  as two separate checks rather than being collapsed into one, matching the Python version's
+  `should_continue`, which also needs to distinguish *why* it's stopping in order to log the
+  cap-hit warning correctly.
+- **Cap-hit warning preserved**: hitting `maxPages` while `cursor` is still non-null logs the
+  exact same warning as `should_continue`'s second branch — this is a case Python's own comment
+  flags as worth surfacing to an operator, since data was left unsynced.
+- **Per-page failure handling unchanged**: `TransactionPageFetchStep.fetchPage` stops the loop on
+  a failed page fetch (returning an empty page with no next cursor) rather than retrying forever,
+  exactly matching the Python version's explicit non-retry choice and its note that bounded
+  retries would be a separate, dedicated pattern.
+- **Versions**: same Ollama-backed `spring-ai-starter-model-ollama` / `llama3.1:8b` setup as the
+  other ports in this series.
