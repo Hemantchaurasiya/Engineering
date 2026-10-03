@@ -329,3 +329,596 @@ if __name__ == "__main__":
 ---
 
 ⬅ [13. Event-Driven Workflow](13-event-driven-workflow.md) | [Back to index](README.md) | Next: [15. Long-Running Workflow](15-long-running-workflow.md) ➡
+
+# Deep Research Report Generator — Async Submit/Poll Workflow (Java + Spring AI)
+
+A Java port of the LangGraph async job workflow — `submit` returns a job ID **immediately**; the
+actual multi-step workflow runs in the background; the caller polls a job store for status/result.
+Built on:
+
+- **Java 25** (current LTS) — a virtual-thread executor runs the graph detached from the request
+- **Spring Boot 4.1.0**
+- **Spring AI 2.0.0** (GA) with the **Ollama** starter, mirroring `llama3.1:8b`
+
+## Mapping the shape
+
+The Python version makes a point worth preserving structurally: **the graph itself has no
+awareness that it's being run in the background** — `build_graph()` is an ordinary 3-step
+sequential workflow (like the very first port in this series), and it's only `submit_research_job`
+wrapping it in `asyncio.create_task(...)` that makes it async. The Java port keeps that same
+separation — `ResearchGraphService` is a plain sequential pipeline that knows nothing about jobs,
+and `ResearchJobService` is the only place that knows about background execution and polling.
+
+| LangGraph concept | Spring / Java equivalent |
+|---|---|
+| `build_graph()` (plain 3-step sequential graph) | `ResearchGraphService.run(topic)` — same three steps, still knows nothing about jobs |
+| `asyncio.create_task(_run_research_job(...))` | `executorService.submit(...)` on a virtual-thread executor — fire-and-forget, not awaited |
+| `_job_store: dict[str, dict]` | `ConcurrentHashMap<String, ResearchJob>` — see note below on why this needs to be concurrency-safe in a way the Python demo's single-event-loop dict doesn't |
+| `submit_research_job(topic) -> str` | `ResearchJobService.submit(topic)` — returns the job ID immediately, doesn't block on the graph |
+| `get_job_status(job_id) -> dict` | `ResearchJobService.getStatus(jobId)` — a plain map read, never blocks |
+| Demo's polling loop with `asyncio.sleep(1)` | `WHILE`-loop poller in the CLI runner using `Thread.sleep` |
+
+**Why the job store needs real concurrency control here, even though the Python version's is a
+plain dict**: Python's single-threaded asyncio event loop means `_job_store[job_id] = ...` and
+`_job_store.get(job_id)` never truly run at the same instant — cooperative scheduling serializes
+them. The Java version genuinely runs the background task on a separate (virtual) thread
+concurrently with the HTTP request thread that might poll it, so `ConcurrentHashMap` isn't an
+upgrade for paranoia's sake — it's required for correctness the moment the single-threaded
+assumption goes away.
+
+---
+
+## Project structure
+
+```
+research-job/
+├── pom.xml
+└── src/main/java/com/example/researchjob/
+    ├── ResearchJobApplication.java
+    ├── model/
+    │   ├── JobStatus.java
+    │   └── ResearchJob.java
+    ├── pipeline/
+    │   ├── SearchTopicStep.java
+    │   ├── AnalyzeFindingsStep.java
+    │   ├── WriteReportStep.java
+    │   └── ResearchGraphService.java
+    ├── job/
+    │   ├── ResearchJobStore.java
+    │   └── ResearchJobService.java
+    ├── web/
+    │   └── ResearchJobController.java
+    └── ResearchJobRunner.java   (CLI demo, mirrors the Python __main__ / _demo block)
+└── src/main/resources/
+    └── application.yml
+```
+
+---
+
+## `pom.xml`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.example</groupId>
+    <artifactId>research-job</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+
+    <properties>
+        <java.version>25</java.version>
+        <spring-ai.version>2.0.0</spring-ai.version>
+    </properties>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.0</version>
+        <relativePath/>
+    </parent>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <!-- Ollama model starter — local llama3.1:8b, same as langchain-ollama -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-ollama</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+```
+
+> **Production note, matching the Python demo's own comment**: `_job_store` is an in-memory dict
+> "for this demo; in production this would be a real database (Postgres, Redis, etc.) so job
+> status survives a server restart and is visible across multiple server instances." The same is
+> true here — `ResearchJobStore` below is a thin interface specifically so an in-memory
+> implementation can be swapped for a JPA-backed or Redis-backed one (the same idea as the
+> `expense-approval` port's durable-checkpoint pattern) without touching `ResearchJobService`.
+
+## `src/main/resources/application.yml`
+
+```yaml
+spring:
+  application:
+    name: research-job
+  ai:
+    ollama:
+      base-url: http://localhost:11434
+      chat:
+        options:
+          model: llama3.1:8b
+          temperature: 0.3
+
+logging:
+  level:
+    com.example.researchjob: INFO
+```
+
+---
+
+## Domain model
+
+### `model/JobStatus.java`
+
+```java
+package com.example.researchjob.model;
+
+public enum JobStatus {
+    PROCESSING,
+    COMPLETED,
+    FAILED,
+    NOT_FOUND
+}
+```
+
+### `model/ResearchJob.java`
+
+An immutable snapshot of one job's state — each update produces a new instance rather than
+mutating fields in place, which keeps the job store's `put`/`get` pairs safe under real
+concurrency without needing per-field synchronization.
+
+```java
+package com.example.researchjob.model;
+
+import java.time.Instant;
+
+public record ResearchJob(
+        String jobId,
+        String topic,
+        JobStatus status,
+        Instant submittedAt,
+        Instant completedAt,
+        String report,
+        String error
+) {
+
+    public static ResearchJob submitted(String jobId, String topic) {
+        return new ResearchJob(jobId, topic, JobStatus.PROCESSING, Instant.now(), null, null, null);
+    }
+
+    public ResearchJob completed(String report) {
+        return new ResearchJob(jobId, topic, JobStatus.COMPLETED, submittedAt, Instant.now(), report, null);
+    }
+
+    public ResearchJob failed(String errorMessage) {
+        return new ResearchJob(jobId, topic, JobStatus.FAILED, submittedAt, Instant.now(), null, errorMessage);
+    }
+}
+```
+
+---
+
+## The graph — knows nothing about jobs
+
+### `pipeline/SearchTopicStep.java`
+
+```java
+package com.example.researchjob.pipeline;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+
+@Component
+public class SearchTopicStep {
+
+    private static final Logger log = LoggerFactory.getLogger(SearchTopicStep.class);
+
+    public String search(String topic) throws InterruptedException {
+        log.info("STEP 1/3 - search_topic: {}", topic);
+        Thread.sleep(1000); // simulated search latency, cheap on a virtual thread
+        // In production: call a real search API/tool here.
+        return "Key points gathered about: %s.".formatted(topic);
+    }
+}
+```
+
+### `pipeline/AnalyzeFindingsStep.java`
+
+```java
+package com.example.researchjob.pipeline;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.stereotype.Component;
+
+@Component
+public class AnalyzeFindingsStep {
+
+    private static final Logger log = LoggerFactory.getLogger(AnalyzeFindingsStep.class);
+
+    private final ChatClient chatClient;
+
+    public AnalyzeFindingsStep(ChatClient.Builder chatClientBuilder) {
+        this.chatClient = chatClientBuilder.build();
+    }
+
+    public String analyze(String searchNotes) {
+        log.info("STEP 2/3 - analyze_findings");
+        return chatClient.prompt()
+                .user("Given these notes, list 2-3 key insights in bullet points:\n" + searchNotes)
+                .call()
+                .content()
+                .strip();
+    }
+}
+```
+
+### `pipeline/WriteReportStep.java`
+
+```java
+package com.example.researchjob.pipeline;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.stereotype.Component;
+
+@Component
+public class WriteReportStep {
+
+    private static final Logger log = LoggerFactory.getLogger(WriteReportStep.class);
+
+    private final ChatClient chatClient;
+
+    public WriteReportStep(ChatClient.Builder chatClientBuilder) {
+        this.chatClient = chatClientBuilder.build();
+    }
+
+    public String write(String topic, String analysis) {
+        log.info("STEP 3/3 - write_report");
+        String prompt = "Write a short research summary (2-3 sentences) on '%s' based on this analysis:\n%s"
+                .formatted(topic, analysis);
+        return chatClient.prompt()
+                .user(prompt)
+                .call()
+                .content()
+                .strip();
+    }
+}
+```
+
+### `pipeline/ResearchGraphService.java`
+
+The plain sequential pipeline — the direct analogue of `build_graph()`. This class has no idea
+it might be run detached from a request; that's entirely `ResearchJobService`'s concern, exactly
+mirroring how the Python graph object is built once at module scope with no job awareness at all.
+
+```java
+package com.example.researchjob.pipeline;
+
+import org.springframework.stereotype.Service;
+
+@Service
+public class ResearchGraphService {
+
+    private final SearchTopicStep searchTopicStep;
+    private final AnalyzeFindingsStep analyzeFindingsStep;
+    private final WriteReportStep writeReportStep;
+
+    public ResearchGraphService(SearchTopicStep searchTopicStep,
+                                 AnalyzeFindingsStep analyzeFindingsStep,
+                                 WriteReportStep writeReportStep) {
+        this.searchTopicStep = searchTopicStep;
+        this.analyzeFindingsStep = analyzeFindingsStep;
+        this.writeReportStep = writeReportStep;
+    }
+
+    public String run(String topic) throws InterruptedException {
+        String searchNotes = searchTopicStep.search(topic);
+        String analysis = analyzeFindingsStep.analyze(searchNotes);
+        return writeReportStep.write(topic, analysis);
+    }
+}
+```
+
+---
+
+## The job store
+
+### `job/ResearchJobStore.java`
+
+A thin interface so the in-memory implementation used here can later be swapped for a durable one
+(JPA, Redis) without touching `ResearchJobService` — see the production note above `application.yml`.
+
+```java
+package com.example.researchjob.job;
+
+import com.example.researchjob.model.ResearchJob;
+import org.springframework.stereotype.Component;
+
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
+
+@Component
+public class ResearchJobStore {
+
+    // In-memory for this demo; in production this would be a real database (Postgres,
+    // Redis, etc.) so job status survives a server restart and is visible across
+    // multiple server instances — same caveat as the Python version's own comment.
+    private final Map<String, ResearchJob> jobs = new ConcurrentHashMap<>();
+
+    public void save(ResearchJob job) {
+        jobs.put(job.jobId(), job);
+    }
+
+    public Optional<ResearchJob> find(String jobId) {
+        return Optional.ofNullable(jobs.get(jobId));
+    }
+}
+```
+
+---
+
+## Submit and poll
+
+### `job/ResearchJobService.java`
+
+The direct analogue of `submit_research_job` and `get_job_status` together — the only place in
+this port that knows the graph is being run in the background.
+
+```java
+package com.example.researchjob.job;
+
+import com.example.researchjob.model.JobStatus;
+import com.example.researchjob.model.ResearchJob;
+import com.example.researchjob.pipeline.ResearchGraphService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+
+import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+@Service
+public class ResearchJobService {
+
+    private static final Logger log = LoggerFactory.getLogger(ResearchJobService.class);
+
+    private final ResearchGraphService researchGraphService;
+    private final ResearchJobStore jobStore;
+    private final ExecutorService virtualThreadExecutor = Executors.newVirtualThreadPerTaskExecutor();
+
+    public ResearchJobService(ResearchGraphService researchGraphService, ResearchJobStore jobStore) {
+        this.researchGraphService = researchGraphService;
+        this.jobStore = jobStore;
+    }
+
+    /**
+     * SUBMIT. Returns immediately with a job ID; does NOT wait for the graph to finish —
+     * the direct analogue of {@code submit_research_job} not awaiting its background task.
+     */
+    public String submit(String topic) {
+        String jobId = UUID.randomUUID().toString();
+        jobStore.save(ResearchJob.submitted(jobId, topic));
+
+        // Fire-and-forget: schedules the graph to run in the background on a virtual
+        // thread, matching asyncio.create_task(...) not blocking the caller.
+        virtualThreadExecutor.submit(() -> runResearchJob(jobId, topic));
+
+        log.info("JOB {} - submitted for topic '{}'", jobId, topic);
+        return jobId;
+    }
+
+    /**
+     * POLL. Just reads current status; never blocks — the direct analogue of {@code get_job_status}.
+     */
+    public ResearchJob getStatus(String jobId) {
+        return jobStore.find(jobId)
+                .orElse(new ResearchJob(jobId, null, JobStatus.NOT_FOUND, null, null, null, null));
+    }
+
+    private void runResearchJob(String jobId, String topic) {
+        try {
+            String report = researchGraphService.run(topic);
+            jobStore.save(jobStore.find(jobId).orElseThrow().completed(report));
+            log.info("JOB {} - completed", jobId);
+        } catch (Exception e) {
+            jobStore.save(jobStore.find(jobId).orElseThrow().failed(e.getMessage()));
+            log.error("JOB {} - failed: {}", jobId, e.getMessage());
+        }
+    }
+}
+```
+
+---
+
+## Entry points
+
+### `web/ResearchJobController.java`
+
+```java
+package com.example.researchjob.web;
+
+import com.example.researchjob.job.ResearchJobService;
+import com.example.researchjob.model.ResearchJob;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+public class ResearchJobController {
+
+    private final ResearchJobService researchJobService;
+
+    public ResearchJobController(ResearchJobService researchJobService) {
+        this.researchJobService = researchJobService;
+    }
+
+    @PostMapping("/api/research-jobs")
+    public SubmitResponse submit(@RequestParam String topic) {
+        return new SubmitResponse(researchJobService.submit(topic));
+    }
+
+    @GetMapping("/api/research-jobs/{jobId}")
+    public ResearchJob status(@PathVariable String jobId) {
+        return researchJobService.getStatus(jobId);
+    }
+
+    public record SubmitResponse(String jobId) {}
+}
+```
+
+### `ResearchJobRunner.java` (CLI demo, mirrors the Python `_demo()` polling loop)
+
+```java
+package com.example.researchjob;
+
+import com.example.researchjob.job.ResearchJobService;
+import com.example.researchjob.model.JobStatus;
+import org.springframework.boot.CommandLineRunner;
+import org.springframework.context.annotation.Profile;
+import org.springframework.stereotype.Component;
+
+@Component
+@Profile("demo")
+public class ResearchJobRunner implements CommandLineRunner {
+
+    private final ResearchJobService researchJobService;
+
+    public ResearchJobRunner(ResearchJobService researchJobService) {
+        this.researchJobService = researchJobService;
+    }
+
+    @Override
+    public void run(String... args) throws InterruptedException {
+        String jobId = researchJobService.submit("impact of AI on logistics");
+        System.out.println("Submitted job " + jobId + " - client is free to do other work now.");
+
+        var status = researchJobService.getStatus(jobId);
+        while (status.status() == JobStatus.PROCESSING) {
+            System.out.println("Poll -> status: " + status.status());
+            Thread.sleep(1000);
+            status = researchJobService.getStatus(jobId);
+        }
+        System.out.println("Poll -> status: " + status.status());
+
+        if (status.status() == JobStatus.COMPLETED) {
+            System.out.println("\nReport: " + status.report());
+        } else {
+            System.out.println("\nJob failed: " + status.error());
+        }
+    }
+}
+```
+
+### `ResearchJobApplication.java`
+
+```java
+package com.example.researchjob;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class ResearchJobApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(ResearchJobApplication.class, args);
+    }
+}
+```
+
+---
+
+## Running it
+
+```bash
+ollama pull llama3.1:8b
+ollama serve   # if not already running
+
+# CLI demo (submits, then polls every second until completion, like the Python _demo())
+mvn spring-boot:run -Dspring-boot.run.profiles=demo
+
+# Or as a service — submit returns instantly
+mvn spring-boot:run
+curl -X POST "localhost:8080/api/research-jobs?topic=impact%20of%20AI%20on%20logistics"
+# -> {"jobId":"..."}
+
+# Poll with the returned ID
+curl localhost:8080/api/research-jobs/<jobId>
+```
+
+## Notes on the port
+
+- **The graph stays job-unaware, deliberately**: `ResearchGraphService` is structurally identical
+  to the first (sequential) workflow in this series — three steps, no job ID, no status field
+  anywhere in sight. Keeping that separation is the whole architectural point of the Python
+  version: any ordinary graph can be made async just by wrapping the submit call, without the
+  graph itself changing at all. If this pipeline later needs to run synchronously somewhere else
+  (a batch job, a test), `ResearchGraphService.run(topic)` is already reusable as-is.
+- **Why `ConcurrentHashMap` matters here, unlike the Python dict**: called out in the mapping
+  table above, but worth restating — this isn't a defensive upgrade, it's a correctness
+  requirement, because Java's virtual-thread executor gives genuine concurrent execution between
+  the background job and any request thread polling it, unlike Python's single-threaded event
+  loop where the dict never sees two operations truly overlap.
+- **Immutable job snapshots, not mutable field updates**: `ResearchJob.completed(...)` and
+  `.failed(...)` each return a new record rather than mutating fields on a shared object — this
+  avoids a poller ever observing a job record with some fields updated and others not, which a
+  mutable class with multiple non-atomic field writes could allow under real concurrency (the
+  Python version's `.update(...)` on a dict inside a single-threaded loop doesn't have this
+  hazard, but the Java version's concurrent writer does).
+- **Job store as a swappable seam**: `ResearchJobStore` is deliberately a thin, separately
+  injectable component (not folded into `ResearchJobService`) so it can become a
+  `JpaRepository`-backed or Redis-backed implementation later — the same durable-seam idea used
+  for the paused state in the `expense-approval` port, applied here to job status instead of a
+  human-approval pause.
+- **Versions**: same Ollama-backed `spring-ai-starter-model-ollama` / `llama3.1:8b` setup as the
+  other ports in this series.
