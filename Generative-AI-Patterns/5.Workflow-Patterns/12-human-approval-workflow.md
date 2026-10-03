@@ -394,3 +394,682 @@ if __name__ == "__main__":
 ---
 
 ⬅ [11. Fallback Pattern](11-fallback-pattern.md) | [Back to index](README.md) | Next: [13. Event-Driven Workflow](13-event-driven-workflow.md) ➡
+
+# High-Value Expense Approval — Human-in-the-Loop (Java + Spring AI)
+
+A Java port of the LangGraph human-approval workflow — pause execution indefinitely waiting for a
+human decision, then resume exactly where it left off, potentially hours or days later and via a
+completely different request. Built on:
+
+- **Java 25** (current LTS)
+- **Spring Boot 4.1.0** with **Spring Data JPA** (the checkpointer's job becomes a real database row)
+- **Spring AI 2.0.0** (GA) with the **Ollama** starter, mirroring `llama3.1:8b`
+
+## Mapping the shape — this one needs real persistence, not just a different control-flow idiom
+
+Every other pattern in this series translated a LangGraph *control-flow* idea (a loop, a branch, a
+fan-out) into a Java control-flow idea. This one is different: `interrupt()` and
+`Command(resume=...)` aren't control flow, they're **durable pause/resume across two unrelated
+HTTP requests**, backed by LangGraph's checkpointer. Java has no equivalent language or framework
+primitive for "suspend this method call and resume it later, possibly on a different server" —
+what Spring gives you instead is the normal, idiomatic way this is actually built in production
+systems: **persist the paused state as a row in a database**, return an identifier, and let a
+second, independent request load that row and continue.
+
+This is worth calling out explicitly: the Python demo's own comment says `InMemorySaver` is
+"fine for a demo" and production systems use a durable checkpointer like `PostgresSaver` — the
+Java port below *is* that durable version, using Spring Data JPA instead of an in-memory map.
+
+| LangGraph concept | Spring / Java equivalent |
+|---|---|
+| `ExpenseState` (Pydantic model) | `ExpenseApproval` JPA `@Entity` — the persisted row *is* the paused state |
+| `interrupt(payload)` pausing the graph | Returning an `ExpenseApprovalResponse` with `status = PENDING_APPROVAL` and **saving** the entity, instead of continuing execution |
+| `InMemorySaver` / `PostgresSaver` checkpointer | The `ExpenseApprovalRepository` (Spring Data JPA) — literally a durable checkpoint store |
+| `thread_id` (keys a paused run) | `expenseId`, the entity's `@Id` |
+| `Command(resume={...})` on a later call | A separate `POST /api/expenses/{id}/decision` endpoint that loads the row and finishes the workflow |
+| `"__interrupt__"` sentinel in the result dict | An explicit `ApprovalStatus.PENDING_APPROVAL` enum value on the response |
+| Everything after `assess_expense` running in one process | Split across two HTTP requests, exactly as the Python version's own `submit_expense` / `resume_expense_approval` split already implies in production |
+
+---
+
+## Project structure
+
+```
+expense-approval/
+├── pom.xml
+└── src/main/java/com/example/expenseapproval/
+    ├── ExpenseApprovalApplication.java
+    ├── domain/
+    │   ├── ExpenseApproval.java        (JPA entity — the durable "paused state")
+    │   ├── ApprovalStatus.java
+    │   └── ExpenseApprovalRepository.java
+    ├── model/
+    │   ├── ExpenseSubmission.java
+    │   ├── ExpenseApprovalResponse.java
+    │   └── ManagerDecisionRequest.java
+    ├── pipeline/
+    │   ├── ExpenseAssessmentStep.java
+    │   ├── ExpenseSubmissionService.java
+    │   └── ExpenseDecisionService.java
+    └── web/
+        └── ExpenseApprovalController.java
+└── src/main/resources/
+    └── application.yml
+```
+
+There's deliberately no `ExpenseApprovalRunner` CLI demo here (unlike every other port in this
+series) — a same-process, single-run demo would misrepresent the whole point of the pattern,
+which is that submission and approval happen in **separate** requests, possibly from separate
+systems. The "Running it" section below shows the equivalent two-`curl`-calls demo instead.
+
+---
+
+## `pom.xml`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.example</groupId>
+    <artifactId>expense-approval</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+
+    <properties>
+        <java.version>25</java.version>
+        <spring-ai.version>2.0.0</spring-ai.version>
+    </properties>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.0</version>
+        <relativePath/>
+    </parent>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <!-- This is the "durable checkpointer" — swap the H2 runtime dependency below
+             for a PostgreSQL driver in production, exactly as the Python demo's own
+             comment suggests swapping InMemorySaver for PostgresSaver. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <!-- Ollama model starter — local llama3.1:8b, same as langchain-ollama -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-ollama</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+```
+
+## `src/main/resources/application.yml`
+
+```yaml
+spring:
+  application:
+    name: expense-approval
+  datasource:
+    url: jdbc:h2:mem:expense-approval;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+  ai:
+    ollama:
+      base-url: http://localhost:11434
+      chat:
+        options:
+          model: llama3.1:8b
+          temperature: 0.0
+
+logging:
+  level:
+    com.example.expenseapproval: INFO
+```
+
+> Swap the H2 `datasource`/dependency for PostgreSQL (or whatever durable store you already run)
+> to move this from demo to production — the application code above the `datasource:` line
+> doesn't change, which is exactly the point of persisting the paused state through a repository
+> abstraction rather than an in-memory structure.
+
+---
+
+## Persisted state — the durable checkpoint
+
+### `domain/ApprovalStatus.java`
+
+```java
+package com.example.expenseapproval.domain;
+
+public enum ApprovalStatus {
+    PENDING_APPROVAL,
+    AUTO_APPROVED,
+    MANAGER_APPROVED,
+    REJECTED
+}
+```
+
+### `domain/ExpenseApproval.java`
+
+This entity *is* the paused workflow state — where the Python version relies on the checkpointer
+to serialize `ExpenseState` under a `thread_id`, here the row itself, keyed by `expenseId`, plays
+that role explicitly.
+
+```java
+package com.example.expenseapproval.domain;
+
+import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.Id;
+
+@Entity
+public class ExpenseApproval {
+
+    @Id
+    private String expenseId;
+
+    private String employeeName;
+    private double amount;
+    private String category;
+    private String description;
+
+    private boolean needsApproval;
+    private String aiNote;
+
+    @Enumerated(EnumType.STRING)
+    private ApprovalStatus status;
+
+    private String managerDecision; // "approved" | "rejected", set only after resume
+    private String managerComment;
+
+    protected ExpenseApproval() {
+        // required by JPA
+    }
+
+    public ExpenseApproval(String expenseId, String employeeName, double amount,
+                            String category, String description) {
+        this.expenseId = expenseId;
+        this.employeeName = employeeName;
+        this.amount = amount;
+        this.category = category;
+        this.description = description;
+    }
+
+    // -- getters/setters --
+
+    public String getExpenseId() {
+        return expenseId;
+    }
+
+    public String getEmployeeName() {
+        return employeeName;
+    }
+
+    public double getAmount() {
+        return amount;
+    }
+
+    public String getCategory() {
+        return category;
+    }
+
+    public String getDescription() {
+        return description;
+    }
+
+    public boolean isNeedsApproval() {
+        return needsApproval;
+    }
+
+    public void setNeedsApproval(boolean needsApproval) {
+        this.needsApproval = needsApproval;
+    }
+
+    public String getAiNote() {
+        return aiNote;
+    }
+
+    public void setAiNote(String aiNote) {
+        this.aiNote = aiNote;
+    }
+
+    public ApprovalStatus getStatus() {
+        return status;
+    }
+
+    public void setStatus(ApprovalStatus status) {
+        this.status = status;
+    }
+
+    public String getManagerDecision() {
+        return managerDecision;
+    }
+
+    public void setManagerDecision(String managerDecision) {
+        this.managerDecision = managerDecision;
+    }
+
+    public String getManagerComment() {
+        return managerComment;
+    }
+
+    public void setManagerComment(String managerComment) {
+        this.managerComment = managerComment;
+    }
+}
+```
+
+### `domain/ExpenseApprovalRepository.java`
+
+```java
+package com.example.expenseapproval.domain;
+
+import org.springframework.data.jpa.repository.JpaRepository;
+
+public interface ExpenseApprovalRepository extends JpaRepository<ExpenseApproval, String> {
+}
+```
+
+---
+
+## API models
+
+### `model/ExpenseSubmission.java`
+
+```java
+package com.example.expenseapproval.model;
+
+public record ExpenseSubmission(
+        String expenseId,
+        String employeeName,
+        double amount,
+        String category,
+        String description
+) {}
+```
+
+### `model/ExpenseApprovalResponse.java`
+
+```java
+package com.example.expenseapproval.model;
+
+import com.example.expenseapproval.domain.ApprovalStatus;
+
+public record ExpenseApprovalResponse(
+        String expenseId,
+        ApprovalStatus status,
+        String question,       // populated only when status == PENDING_APPROVAL
+        Double amount,
+        String aiNote,
+        String finalStatus     // populated once resolved: "auto_approved" | "manager_approved" | "rejected"
+) {}
+```
+
+### `model/ManagerDecisionRequest.java`
+
+```java
+package com.example.expenseapproval.model;
+
+public record ManagerDecisionRequest(String decision, String comment) {}
+```
+
+---
+
+## Assessment step (runs before the pause point)
+
+### `pipeline/ExpenseAssessmentStep.java`
+
+The direct analogue of `assess_expense` — an LLM call that notes anything unusual, plus the
+threshold check that decides whether a pause is needed at all.
+
+```java
+package com.example.expenseapproval.pipeline;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.stereotype.Component;
+
+@Component
+public class ExpenseAssessmentStep {
+
+    private static final Logger log = LoggerFactory.getLogger(ExpenseAssessmentStep.class);
+    public static final double APPROVAL_THRESHOLD = 500.0;
+
+    private static final String ASSESS_PROMPT = """
+            Briefly note anything unusual about this expense in ONE short sentence \
+            (or say "Nothing unusual." if it looks routine).
+
+            Amount: ${amount}
+            Category: {category}
+            Description: {description}
+            """;
+
+    public record Assessment(boolean needsApproval, String aiNote) {}
+
+    private final ChatClient chatClient;
+
+    public ExpenseAssessmentStep(ChatClient.Builder chatClientBuilder) {
+        this.chatClient = chatClientBuilder.build();
+    }
+
+    public Assessment assess(double amount, String category, String description) {
+        log.info("ASSESS - amount ${}", amount);
+        String note;
+        try {
+            note = chatClient.prompt()
+                    .user(u -> u.text(ASSESS_PROMPT)
+                            .param("amount", String.valueOf(amount))
+                            .param("category", category)
+                            .param("description", description))
+                    .call()
+                    .content()
+                    .strip();
+        } catch (Exception e) {
+            log.error("assess_expense LLM call failed: {}", e.getMessage());
+            note = "Automated review unavailable.";
+        }
+
+        return new Assessment(amount > APPROVAL_THRESHOLD, note);
+    }
+}
+```
+
+---
+
+## Submission — the "interrupt" side
+
+### `pipeline/ExpenseSubmissionService.java`
+
+The direct analogue of `submit_expense`. Where the Python version's `interrupt(payload)` call
+suspends the running graph in place, this method simply **returns** after saving — the "pause" is
+just the fact that no further code runs until a second, separate request arrives.
+
+```java
+package com.example.expenseapproval.pipeline;
+
+import com.example.expenseapproval.domain.ApprovalStatus;
+import com.example.expenseapproval.domain.ExpenseApproval;
+import com.example.expenseapproval.domain.ExpenseApprovalRepository;
+import com.example.expenseapproval.model.ExpenseApprovalResponse;
+import com.example.expenseapproval.model.ExpenseSubmission;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+@Service
+public class ExpenseSubmissionService {
+
+    private static final Logger log = LoggerFactory.getLogger(ExpenseSubmissionService.class);
+
+    private final ExpenseAssessmentStep expenseAssessmentStep;
+    private final ExpenseApprovalRepository repository;
+
+    public ExpenseSubmissionService(ExpenseAssessmentStep expenseAssessmentStep,
+                                     ExpenseApprovalRepository repository) {
+        this.expenseAssessmentStep = expenseAssessmentStep;
+        this.repository = repository;
+    }
+
+    @Transactional
+    public ExpenseApprovalResponse submit(ExpenseSubmission submission) {
+        var assessment = expenseAssessmentStep.assess(
+                submission.amount(), submission.category(), submission.description());
+
+        var expense = new ExpenseApproval(
+                submission.expenseId(), submission.employeeName(), submission.amount(),
+                submission.category(), submission.description());
+        expense.setNeedsApproval(assessment.needsApproval());
+        expense.setAiNote(assessment.aiNote());
+
+        if (!assessment.needsApproval()) {
+            log.info("AUTO-APPROVE - expense {} under threshold", submission.expenseId());
+            expense.setStatus(ApprovalStatus.AUTO_APPROVED);
+            repository.save(expense);
+            return new ExpenseApprovalResponse(
+                    submission.expenseId(), ApprovalStatus.AUTO_APPROVED, null,
+                    submission.amount(), assessment.aiNote(), "auto_approved");
+        }
+
+        // This save is the "pause": the workflow's state is now durable, and execution
+        // simply ends here until a separate request calls ExpenseDecisionService.decide(...).
+        log.info("PAUSE - expense {} needs manager approval", submission.expenseId());
+        expense.setStatus(ApprovalStatus.PENDING_APPROVAL);
+        repository.save(expense);
+
+        return new ExpenseApprovalResponse(
+                submission.expenseId(), ApprovalStatus.PENDING_APPROVAL,
+                "Approve or reject this expense?", submission.amount(), assessment.aiNote(), null);
+    }
+}
+```
+
+---
+
+## Decision — the "resume" side
+
+### `pipeline/ExpenseDecisionService.java`
+
+The direct analogue of `resume_expense_approval` — a **separate** call, typically made much
+later, by a manager clicking "Approve" in a dashboard. It loads the persisted row exactly where
+`submit` left it and finishes the workflow.
+
+```java
+package com.example.expenseapproval.pipeline;
+
+import com.example.expenseapproval.domain.ApprovalStatus;
+import com.example.expenseapproval.domain.ExpenseApproval;
+import com.example.expenseapproval.domain.ExpenseApprovalRepository;
+import com.example.expenseapproval.model.ExpenseApprovalResponse;
+import com.example.expenseapproval.model.ManagerDecisionRequest;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.NoSuchElementException;
+
+@Service
+public class ExpenseDecisionService {
+
+    private static final Logger log = LoggerFactory.getLogger(ExpenseDecisionService.class);
+
+    private final ExpenseApprovalRepository repository;
+
+    public ExpenseDecisionService(ExpenseApprovalRepository repository) {
+        this.repository = repository;
+    }
+
+    @Transactional
+    public ExpenseApprovalResponse decide(String expenseId, ManagerDecisionRequest decisionRequest) {
+        ExpenseApproval expense = repository.findById(expenseId)
+                .orElseThrow(() -> new NoSuchElementException("No pending expense: " + expenseId));
+
+        if (expense.getStatus() != ApprovalStatus.PENDING_APPROVAL) {
+            throw new IllegalStateException(
+                    "Expense %s is not awaiting approval (status=%s)"
+                            .formatted(expenseId, expense.getStatus()));
+        }
+
+        // Execution "resumes" here — decisionRequest is exactly what a Command(resume=...)
+        // call would have carried in the Python version.
+        log.info("RESUME - manager responded: {}", decisionRequest.decision());
+
+        expense.setManagerDecision(decisionRequest.decision());
+        expense.setManagerComment(decisionRequest.comment());
+
+        String finalStatus;
+        if ("approved".equals(decisionRequest.decision())) {
+            log.info("FINALIZE - manager approved expense {}", expenseId);
+            expense.setStatus(ApprovalStatus.MANAGER_APPROVED);
+            finalStatus = "manager_approved";
+        } else {
+            log.info("FINALIZE - manager rejected expense {}", expenseId);
+            expense.setStatus(ApprovalStatus.REJECTED);
+            finalStatus = "rejected";
+        }
+
+        repository.save(expense);
+
+        return new ExpenseApprovalResponse(
+                expenseId, expense.getStatus(), null, expense.getAmount(),
+                expense.getAiNote(), finalStatus);
+    }
+}
+```
+
+---
+
+## Entry point
+
+### `web/ExpenseApprovalController.java`
+
+Two genuinely separate endpoints, matching the Python version's two genuinely separate public
+functions.
+
+```java
+package com.example.expenseapproval.web;
+
+import com.example.expenseapproval.model.ExpenseApprovalResponse;
+import com.example.expenseapproval.model.ExpenseSubmission;
+import com.example.expenseapproval.model.ManagerDecisionRequest;
+import com.example.expenseapproval.pipeline.ExpenseDecisionService;
+import com.example.expenseapproval.pipeline.ExpenseSubmissionService;
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequestMapping("/api/expenses")
+public class ExpenseApprovalController {
+
+    private final ExpenseSubmissionService expenseSubmissionService;
+    private final ExpenseDecisionService expenseDecisionService;
+
+    public ExpenseApprovalController(ExpenseSubmissionService expenseSubmissionService,
+                                      ExpenseDecisionService expenseDecisionService) {
+        this.expenseSubmissionService = expenseSubmissionService;
+        this.expenseDecisionService = expenseDecisionService;
+    }
+
+    @PostMapping
+    public ExpenseApprovalResponse submit(@RequestBody ExpenseSubmission submission) {
+        return expenseSubmissionService.submit(submission);
+    }
+
+    @PostMapping("/{expenseId}/decision")
+    public ExpenseApprovalResponse decide(@PathVariable String expenseId,
+                                           @RequestBody ManagerDecisionRequest decision) {
+        return expenseDecisionService.decide(expenseId, decision);
+    }
+}
+```
+
+### `ExpenseApprovalApplication.java`
+
+```java
+package com.example.expenseapproval;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class ExpenseApprovalApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(ExpenseApprovalApplication.class, args);
+    }
+}
+```
+
+---
+
+## Running it
+
+This is genuinely two separate calls — that gap between them is the entire point of the pattern,
+whether it's ten seconds or ten days in a real system:
+
+```bash
+ollama pull llama3.1:8b
+ollama serve   # if not already running
+mvn spring-boot:run
+
+# 1. Submit — this is the "interrupt". The response tells the caller (a dashboard,
+#    a Slack bot, whatever) that a human needs to weigh in, and includes everything
+#    they need to render that decision UI.
+curl -X POST localhost:8080/api/expenses \
+  -H "Content-Type: application/json" \
+  -d '{"expenseId":"EXP-3301","employeeName":"Sam Okafor","amount":1450.00,"category":"Travel","description":"Flight + hotel for client site visit."}'
+
+# ... time passes; a manager reviews it in a dashboard ...
+
+# 2. Decide — this is the "resume". A completely independent request, made whenever
+#    the manager gets around to it, that finishes the workflow exactly where it paused.
+curl -X POST localhost:8080/api/expenses/EXP-3301/decision \
+  -H "Content-Type: application/json" \
+  -d '{"decision":"approved","comment":"Looks reasonable."}'
+```
+
+## Notes on the port
+
+- **This is the pattern where "translate the control flow" breaks down**: every earlier port in
+  this series (loops, branches, fan-out) had a direct Java control-flow analogue. Pause-and-resume
+  across arbitrary wall-clock time doesn't — no JVM thread can practically sit suspended for hours
+  or days waiting on a manager. The honest translation isn't a language feature, it's an
+  architecture: persist state, return, and let a second request pick it back up. This is exactly
+  what LangGraph's checkpointer does *for* you in Python; in Spring, Spring Data JPA plus an
+  explicit status field does the same job in plain sight.
+- **No in-memory demo runner, on purpose**: every other port in this series has an
+  `@Profile("demo")` `CommandLineRunner` that runs the whole thing in one process for convenience.
+  Including one here would misrepresent the pattern — there is no single-process version of "wait
+  for a human" worth demonstrating; the two-`curl`-call sequence above *is* the demo.
+- **`PENDING_APPROVAL` guard on decide()**: `ExpenseDecisionService.decide` explicitly checks the
+  expense is still `PENDING_APPROVAL` before applying a decision, preventing a duplicate or
+  late-arriving decision request from re-finalizing an expense that's already been resolved —
+  a concern the single-process Python demo doesn't have to handle, but any real deployment of
+  this pattern (two independent requests, no shared process) does.
+- **Threshold and prompt kept identical**: `APPROVAL_THRESHOLD = 500.0` and the assessment prompt
+  text are unchanged from `_APPROVAL_THRESHOLD` / `_ASSESS_PROMPT`.
+- **Swap H2 for your real durable store to go to production**: only `application.yml`'s
+  `datasource` block (and the H2 dependency in `pom.xml`) needs to change — the same shape of
+  change the Python demo's own comment describes for swapping `InMemorySaver` → `PostgresSaver`.
