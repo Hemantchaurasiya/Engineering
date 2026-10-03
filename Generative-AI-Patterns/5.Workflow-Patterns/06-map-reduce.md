@@ -324,3 +324,456 @@ if __name__ == "__main__":
 ---
 
 ⬅ [5. Routing](05-routing.md) | [Back to index](README.md) | Next: [7. Fan-Out / Fan-In](07-fan-out-fan-in.md) ➡
+
+# Multi-Store Sales Report Aggregation — Map-Reduce (Java + Spring AI)
+
+A Java port of the LangGraph map-reduce workflow — a **dynamic** fan-out (the number of parallel
+branches is decided at runtime from `len(store_reports)`, via `Send` objects) followed by a single
+reduce step. Built on:
+
+- **Java 25** (current LTS) — virtual threads for the dynamic-width map step
+- **Spring Boot 4.1.0**
+- **Spring AI 2.0.0** (GA) with the **Ollama** starter, mirroring `llama3.1:8b`
+
+## Mapping the shape
+
+The earlier Parallel Workflow port had a **fixed** number of branches (exactly 3, known at
+compile time, each doing something different). Map-reduce is different in a way that matters:
+the branch *count* is unknown until the request arrives, and every branch runs the *same* logic
+over a *different* item. LangGraph expresses that with `Send` objects returned from a routing
+function; Java expresses the same "one task per list item, unknown count, same logic" idea with
+a `Stream`/`List` mapped to concurrent tasks.
+
+| LangGraph concept | Spring / Java equivalent |
+|---|---|
+| `OverallState.store_reports: list[dict]` | `List<StoreReport>` passed into the service |
+| `Annotated[list[str], operator.add]` reducer | Plain `List<String>` built from collected future results — no reducer annotation needed because nothing writes concurrently to one shared field |
+| `map_reports(state) -> list[Send]` | `reports.stream().map(report -> CompletableFuture.supplyAsync(...))` on a virtual-thread executor |
+| `summarize_store` (map step, one per report) | `StoreSummarizationStep.summarize(StoreReport)` |
+| `aggregate_summaries` (reduce step, once) | `SummaryAggregationStep.aggregate(List<String>)` |
+| Fan-in after however many branches ran | `CompletableFuture.allOf(...).join()` over however many futures were created |
+
+Because each map branch only ever sees its own single `StoreReport` — never the full list or a
+shared mutable collection — there's nothing analogous to `operator.add` to reach for in Java: the
+futures are simply collected into a list after they all complete, in the order they were
+submitted.
+
+---
+
+## Project structure
+
+```
+sales-aggregation/
+├── pom.xml
+└── src/main/java/com/example/salesaggregation/
+    ├── SalesAggregationApplication.java
+    ├── model/
+    │   └── StoreReport.java
+    ├── pipeline/
+    │   ├── StoreSummarizationStep.java
+    │   ├── SummaryAggregationStep.java
+    │   └── SalesAggregationService.java
+    ├── web/
+    │   └── SalesAggregationController.java
+    └── SalesAggregationRunner.java   (CLI demo, mirrors the Python __main__ block)
+└── src/main/resources/
+    └── application.yml
+```
+
+---
+
+## `pom.xml`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.example</groupId>
+    <artifactId>sales-aggregation</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+
+    <properties>
+        <java.version>25</java.version>
+        <spring-ai.version>2.0.0</spring-ai.version>
+    </properties>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.0</version>
+        <relativePath/>
+    </parent>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <!-- Ollama model starter — local llama3.1:8b, same as langchain-ollama -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-ollama</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+```
+
+## `src/main/resources/application.yml`
+
+```yaml
+spring:
+  application:
+    name: sales-aggregation
+  ai:
+    ollama:
+      base-url: http://localhost:11434
+      chat:
+        options:
+          model: llama3.1:8b
+          temperature: 0.0
+
+logging:
+  level:
+    com.example.salesaggregation: INFO
+```
+
+---
+
+## Domain model
+
+### `model/StoreReport.java`
+
+```java
+package com.example.salesaggregation.model;
+
+public record StoreReport(String storeId, String reportText) {}
+```
+
+There's no `OverallState`/`StoreReportState` split to model here in Java the way the Python
+version needs it: that split exists so LangGraph can pass each `Send` a narrowed, single-report
+view of state. In Java, `StoreSummarizationStep.summarize` simply takes a `StoreReport` parameter
+directly — there's no shared state object a map branch could accidentally see too much of.
+
+---
+
+## Map step
+
+### `pipeline/StoreSummarizationStep.java`
+
+Runs once per report, fully independent of the others — the direct analogue of `summarize_store`.
+
+```java
+package com.example.salesaggregation.pipeline;
+
+import com.example.salesaggregation.model.StoreReport;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.stereotype.Component;
+
+@Component
+public class StoreSummarizationStep {
+
+    private static final Logger log = LoggerFactory.getLogger(StoreSummarizationStep.class);
+
+    private static final String MAP_PROMPT = """
+            Summarize this single store's daily sales report in 1-2 sentences. \
+            Flag anything unusual (stockouts, unusual returns, staffing issues) \
+            explicitly if present.
+
+            Store ID: {storeId}
+            Report: {reportText}
+            """;
+
+    private final ChatClient chatClient;
+
+    public StoreSummarizationStep(ChatClient.Builder chatClientBuilder) {
+        this.chatClient = chatClientBuilder.build();
+    }
+
+    public String summarize(StoreReport report) {
+        log.info("MAP - summarizing store {}", report.storeId());
+        try {
+            String content = chatClient.prompt()
+                    .user(u -> u.text(MAP_PROMPT)
+                            .param("storeId", report.storeId())
+                            .param("reportText", report.reportText()))
+                    .call()
+                    .content()
+                    .strip();
+            return "Store %s: %s".formatted(report.storeId(), content);
+        } catch (Exception e) {
+            log.error("summarize_store failed for {}: {}", report.storeId(), e.getMessage());
+            return "Store %s: summary unavailable - needs manual review.".formatted(report.storeId());
+        }
+    }
+}
+```
+
+---
+
+## Reduce step
+
+### `pipeline/SummaryAggregationStep.java`
+
+Runs once, only after every map branch has finished — the direct analogue of
+`aggregate_summaries`.
+
+```java
+package com.example.salesaggregation.pipeline;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.stereotype.Component;
+
+import java.util.List;
+
+@Component
+public class SummaryAggregationStep {
+
+    private static final Logger log = LoggerFactory.getLogger(SummaryAggregationStep.class);
+
+    private static final String REDUCE_PROMPT = """
+            You are preparing an executive summary for a retail chain's leadership team. \
+            Below are short summaries from every store today. Combine them into ONE \
+            executive summary:
+            1) overall sales trend across the chain,
+            2) a short bullet list of specific stores that need attention and why.
+
+            Per-store summaries:
+            {summaries}
+            """;
+
+    private final ChatClient chatClient;
+
+    public SummaryAggregationStep(ChatClient.Builder chatClientBuilder) {
+        this.chatClient = chatClientBuilder.build();
+    }
+
+    public String aggregate(List<String> storeSummaries) {
+        log.info("REDUCE - combining {} store summaries", storeSummaries.size());
+        try {
+            return chatClient.prompt()
+                    .user(u -> u.text(REDUCE_PROMPT).param("summaries", String.join("\n", storeSummaries)))
+                    .call()
+                    .content()
+                    .strip();
+        } catch (Exception e) {
+            log.error("aggregate_summaries failed: {}", e.getMessage());
+            return "Executive summary unavailable. Raw per-store summaries:\n"
+                    + String.join("\n", storeSummaries);
+        }
+    }
+}
+```
+
+---
+
+## Dynamic fan-out / fan-in
+
+### `pipeline/SalesAggregationService.java`
+
+The direct analogue of `map_reports` (dynamic fan-out via `Send`) plus the two fixed edges into
+and out of `aggregate_summaries`.
+
+```java
+package com.example.salesaggregation.pipeline;
+
+import com.example.salesaggregation.model.StoreReport;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+@Service
+public class SalesAggregationService {
+
+    private static final Logger log = LoggerFactory.getLogger(SalesAggregationService.class);
+
+    private final StoreSummarizationStep storeSummarizationStep;
+    private final SummaryAggregationStep summaryAggregationStep;
+    private final ExecutorService virtualThreadExecutor = Executors.newVirtualThreadPerTaskExecutor();
+
+    public SalesAggregationService(StoreSummarizationStep storeSummarizationStep,
+                                    SummaryAggregationStep summaryAggregationStep) {
+        this.storeSummarizationStep = storeSummarizationStep;
+        this.summaryAggregationStep = summaryAggregationStep;
+    }
+
+    public String aggregate(List<StoreReport> storeReports) {
+        // Dynamic fan-out: one virtual-thread task per report, exactly like map_reports()
+        // creating one Send per report at run time — the branch count isn't known until
+        // storeReports.size() is evaluated here.
+        log.info("FAN-OUT - dispatching {} store reports", storeReports.size());
+        List<CompletableFuture<String>> futures = storeReports.stream()
+                .map(report -> CompletableFuture.supplyAsync(
+                        () -> storeSummarizationStep.summarize(report), virtualThreadExecutor))
+                .toList();
+
+        // Fan-in: block until every branch — however many there were — has completed,
+        // then collect results in submission order. No reducer annotation needed since
+        // each future produces its own independent String; nothing is written concurrently.
+        CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new)).join();
+        List<String> storeSummaries = futures.stream().map(CompletableFuture::join).toList();
+
+        return summaryAggregationStep.aggregate(storeSummaries);
+    }
+}
+```
+
+---
+
+## Entry points
+
+### `web/SalesAggregationController.java`
+
+```java
+package com.example.salesaggregation.web;
+
+import com.example.salesaggregation.model.StoreReport;
+import com.example.salesaggregation.pipeline.SalesAggregationService;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
+
+@RestController
+public class SalesAggregationController {
+
+    private final SalesAggregationService salesAggregationService;
+
+    public SalesAggregationController(SalesAggregationService salesAggregationService) {
+        this.salesAggregationService = salesAggregationService;
+    }
+
+    @PostMapping("/api/sales-reports/aggregate")
+    public String aggregate(@RequestBody List<StoreReport> storeReports) {
+        return salesAggregationService.aggregate(storeReports);
+    }
+}
+```
+
+### `SalesAggregationRunner.java` (CLI demo, mirrors the Python `if __name__ == "__main__"` block)
+
+```java
+package com.example.salesaggregation;
+
+import com.example.salesaggregation.model.StoreReport;
+import com.example.salesaggregation.pipeline.SalesAggregationService;
+import org.springframework.boot.CommandLineRunner;
+import org.springframework.context.annotation.Profile;
+import org.springframework.stereotype.Component;
+
+import java.util.List;
+
+@Component
+@Profile("demo")
+public class SalesAggregationRunner implements CommandLineRunner {
+
+    private final SalesAggregationService salesAggregationService;
+
+    public SalesAggregationRunner(SalesAggregationService salesAggregationService) {
+        this.salesAggregationService = salesAggregationService;
+    }
+
+    @Override
+    public void run(String... args) {
+        List<StoreReport> sampleReports = List.of(
+                new StoreReport("NYC-01", "Sales up 8% vs last week. No issues."),
+                new StoreReport("LA-04", "Ran out of the new sneaker drop by 11am."),
+                new StoreReport("CHI-02", "Two staff called in sick, long checkout lines."),
+                new StoreReport("MIA-03", "Normal day, slightly below forecast.")
+        );
+
+        System.out.println(salesAggregationService.aggregate(sampleReports));
+    }
+}
+```
+
+### `SalesAggregationApplication.java`
+
+```java
+package com.example.salesaggregation;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class SalesAggregationApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(SalesAggregationApplication.class, args);
+    }
+}
+```
+
+---
+
+## Running it
+
+```bash
+ollama pull llama3.1:8b
+ollama serve   # if not already running
+
+# CLI demo (prints the executive summary, like the Python script)
+mvn spring-boot:run -Dspring-boot.run.profiles=demo
+
+# Or as a service — send any number of reports, the fan-out width adapts
+mvn spring-boot:run
+curl -X POST localhost:8080/api/sales-reports/aggregate \
+  -H "Content-Type: application/json" \
+  -d '[{"storeId":"NYC-01","reportText":"Sales up 8%% vs last week."},{"storeId":"LA-04","reportText":"Ran out of stock by 11am."}]'
+```
+
+## Notes on the port
+
+- **Dynamic width, no reducer needed**: `operator.add` on `store_summaries` exists in the Python
+  version because LangGraph merges concurrent partial-state writes from an unknown number of
+  branches into one shared list field. In Java, each branch is just a `CompletableFuture<String>`
+  local to the method call — there's no shared mutable state for concurrent branches to write
+  into, so nothing needs a merge strategy; `futures.stream().map(CompletableFuture::join).toList()`
+  collects them once, after `allOf` confirms they're all done.
+- **True dynamic fan-out preserved**: the number of virtual-thread tasks created is
+  `storeReports.size()`, evaluated at call time — exactly like `map_reports` deciding the number
+  of `Send` objects from `len(state.store_reports)` at run time, not at graph-build time.
+- **Per-branch resilience preserved**: `StoreSummarizationStep.summarize` keeps its own
+  try/catch → "needs manual review" fallback per store, and `SummaryAggregationStep.aggregate`
+  keeps its own fallback to raw per-store summaries if the reduce call itself fails — both
+  exactly matching the Python version's two independent failure modes.
+- **Versions**: same Ollama-backed `spring-ai-starter-model-ollama` / `llama3.1:8b` setup as the
+  other parallel/branching ports in this series.
