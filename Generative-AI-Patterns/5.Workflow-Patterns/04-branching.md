@@ -416,3 +416,605 @@ if __name__ == "__main__":
 ---
 
 ⬅ [3. Conditional Workflow](03-conditional-workflow.md) | [Back to index](README.md) | Next: [5. Routing](05-routing.md) ➡
+
+# Support Ticket Intelligent Routing — Branching Workflow (Java + Spring AI)
+
+A Java port of the LangGraph nested-branching workflow — a *tree* of conditional edges rather
+than one flat switch (`classify_category` splits 3 ways, and two of those three branches split
+again at level 2). Built on:
+
+- **Java 25** (current LTS) — nested `sealed` interfaces + exhaustive `switch` for the decision tree
+- **Spring Boot 4.1.0**
+- **Spring AI 2.0.0** (GA) with the **Ollama** starter, mirroring `llama3.1:8b`
+
+## Mapping the shape
+
+The Python version has *three* separate `add_conditional_edges` calls, each with its own routing
+function and dict — one for the top-level category split, and one more for each of the two
+branches (billing, technical) that need a second decision. Java expresses this the same way it
+expressed the single-level conditional workflow, just nested: each level is its own small
+`sealed` hierarchy with its own exhaustive `switch`.
+
+| LangGraph concept | Spring / Java equivalent |
+|---|---|
+| `route_by_category` (level 1, 3-way) | `switch (category)` in `TicketRoutingService.route(...)` |
+| `route_by_refund_amount` (level 2, billing) | `switch` inside `BillingBranch.route(...)` |
+| `route_by_severity` (level 2, technical) | `switch` inside `TechnicalBranch.route(...)` |
+| `route_to_account_team` (no level 2) | `AccountBranch.route(...)` returns directly, no nested switch |
+| All 5 leaf nodes → `END` | All leaf methods return the same `TicketState` shape |
+
+Each level of the tree gets its own enum + exhaustive `switch`, so — as with the flat conditional
+workflow — the compiler rejects an unhandled category or severity value rather than that only
+surfacing when the graph is built or run.
+
+---
+
+## Project structure
+
+```
+ticket-routing/
+├── pom.xml
+└── src/main/java/com/example/ticketrouting/
+    ├── TicketRoutingApplication.java
+    ├── model/
+    │   ├── Category.java
+    │   ├── Severity.java
+    │   ├── Ticket.java
+    │   ├── TicketState.java
+    │   └── RoutingResult.java
+    ├── pipeline/
+    │   ├── CategoryClassificationStep.java
+    │   ├── BillingBranch.java
+    │   ├── TechnicalBranch.java
+    │   ├── AccountBranch.java
+    │   └── TicketRoutingService.java
+    ├── web/
+    │   └── TicketRoutingController.java
+    └── TicketRoutingRunner.java   (CLI demo, mirrors the Python __main__ block)
+└── src/main/resources/
+    └── application.yml
+```
+
+---
+
+## `pom.xml`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.example</groupId>
+    <artifactId>ticket-routing</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+
+    <properties>
+        <java.version>25</java.version>
+        <spring-ai.version>2.0.0</spring-ai.version>
+    </properties>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.0</version>
+        <relativePath/>
+    </parent>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <!-- Ollama model starter — local llama3.1:8b, same as langchain-ollama -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-ollama</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+```
+
+## `src/main/resources/application.yml`
+
+```yaml
+spring:
+  application:
+    name: ticket-routing
+  ai:
+    ollama:
+      base-url: http://localhost:11434
+      chat:
+        options:
+          model: llama3.1:8b
+          temperature: 0.0
+
+logging:
+  level:
+    com.example.ticketrouting: INFO
+```
+
+---
+
+## Domain model
+
+### `model/Category.java`
+
+```java
+package com.example.ticketrouting.model;
+
+public enum Category {
+    BILLING,
+    TECHNICAL,
+    ACCOUNT
+}
+```
+
+### `model/Severity.java`
+
+```java
+package com.example.ticketrouting.model;
+
+public enum Severity {
+    CRITICAL,
+    NORMAL
+}
+```
+
+### `model/Ticket.java`
+
+```java
+package com.example.ticketrouting.model;
+
+public record Ticket(String ticketText, double disputedAmount) {
+
+    public Ticket(String ticketText) {
+        this(ticketText, 0.0);
+    }
+}
+```
+
+### `model/RoutingResult.java`
+
+```java
+package com.example.ticketrouting.model;
+
+public record RoutingResult(String routingDecision, String routingReason) {}
+```
+
+### `model/TicketState.java`
+
+```java
+package com.example.ticketrouting.model;
+
+public record TicketState(
+        Ticket ticket,
+        Category category,
+        Boolean needsSpecialist,   // billing branch, level 2
+        Severity severity,         // technical branch, level 2
+        RoutingResult routingResult
+) {
+
+    public static TicketState initial(Ticket ticket) {
+        return new TicketState(ticket, null, null, null, null);
+    }
+
+    public TicketState withCategory(Category category) {
+        return new TicketState(ticket, category, needsSpecialist, severity, routingResult);
+    }
+
+    public TicketState withNeedsSpecialist(boolean needsSpecialist) {
+        return new TicketState(ticket, category, needsSpecialist, severity, routingResult);
+    }
+
+    public TicketState withSeverity(Severity severity) {
+        return new TicketState(ticket, category, needsSpecialist, severity, routingResult);
+    }
+
+    public TicketState withRoutingResult(String decision, String reason) {
+        return new TicketState(ticket, category, needsSpecialist, severity,
+                new RoutingResult(decision, reason));
+    }
+}
+```
+
+---
+
+## Level 1 — category classification
+
+### `pipeline/CategoryClassificationStep.java`
+
+```java
+package com.example.ticketrouting.pipeline;
+
+import com.example.ticketrouting.model.Category;
+import com.example.ticketrouting.model.TicketState;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.stereotype.Component;
+
+import java.util.Locale;
+
+@Component
+public class CategoryClassificationStep {
+
+    private static final Logger log = LoggerFactory.getLogger(CategoryClassificationStep.class);
+
+    private static final String CATEGORY_PROMPT = """
+            Classify this support ticket into exactly one category:
+            billing, technical, or account. Respond with ONLY that one word.
+
+            Ticket: {ticketText}
+            """;
+
+    private final ChatClient chatClient;
+
+    public CategoryClassificationStep(ChatClient.Builder chatClientBuilder) {
+        this.chatClient = chatClientBuilder.build();
+    }
+
+    public TicketState apply(TicketState state) {
+        log.info("LEVEL 1 - classify_category");
+        try {
+            String word = chatClient.prompt()
+                    .user(u -> u.text(CATEGORY_PROMPT).param("ticketText", state.ticket().ticketText()))
+                    .call()
+                    .content()
+                    .strip()
+                    .toLowerCase(Locale.ROOT);
+
+            Category category;
+            if (word.contains("billing")) {
+                category = Category.BILLING;
+            } else if (word.contains("technical")) {
+                category = Category.TECHNICAL;
+            } else {
+                category = Category.ACCOUNT;
+            }
+            return state.withCategory(category);
+        } catch (Exception e) {
+            log.error("classify_category failed, defaulting to account: {}", e.getMessage());
+            return state.withCategory(Category.ACCOUNT);
+        }
+    }
+}
+```
+
+---
+
+## Level 2 branches
+
+### `pipeline/BillingBranch.java`
+
+The billing branch's own level-2 decision (`check_refund_amount` -> `route_by_refund_amount`) —
+a plain rule, no LLM call, same as the Python version.
+
+```java
+package com.example.ticketrouting.pipeline;
+
+import com.example.ticketrouting.model.TicketState;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+
+import java.util.Locale;
+
+@Component
+public class BillingBranch {
+
+    private static final Logger log = LoggerFactory.getLogger(BillingBranch.class);
+    private static final double SPECIALIST_THRESHOLD = 500.0;
+
+    public TicketState route(TicketState state) {
+        double disputedAmount = state.ticket().disputedAmount();
+        log.info("LEVEL 2 (billing) - check_refund_amount: ${}", String.format(Locale.US, "%.2f", disputedAmount));
+
+        boolean needsSpecialist = disputedAmount > SPECIALIST_THRESHOLD;
+        TicketState withFlag = state.withNeedsSpecialist(needsSpecialist);
+
+        return needsSpecialist
+                ? routeToBillingSpecialist(withFlag, disputedAmount)
+                : routeToRefundBot(withFlag, disputedAmount);
+    }
+
+    private TicketState routeToBillingSpecialist(TicketState state, double disputedAmount) {
+        String reason = "Disputed amount $%,.2f exceeds $500 threshold.".formatted(disputedAmount);
+        return state.withRoutingResult("Billing Specialist", reason);
+    }
+
+    private TicketState routeToRefundBot(TicketState state, double disputedAmount) {
+        String reason = "Disputed amount $%,.2f is within self-service limit.".formatted(disputedAmount);
+        return state.withRoutingResult("Refund Bot (automated)", reason);
+    }
+}
+```
+
+### `pipeline/TechnicalBranch.java`
+
+The technical branch's own level-2 decision (`classify_severity` -> `route_by_severity`) — this
+one *does* need an LLM judgment call.
+
+```java
+package com.example.ticketrouting.pipeline;
+
+import com.example.ticketrouting.model.Severity;
+import com.example.ticketrouting.model.TicketState;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.stereotype.Component;
+
+import java.util.Locale;
+
+@Component
+public class TechnicalBranch {
+
+    private static final Logger log = LoggerFactory.getLogger(TechnicalBranch.class);
+
+    private static final String SEVERITY_PROMPT = """
+            Does this technical support ticket describe a CRITICAL outage (site down,
+            can't log in at all, data loss)? Respond with ONLY one word: critical or normal.
+
+            Ticket: {ticketText}
+            """;
+
+    private final ChatClient chatClient;
+
+    public TechnicalBranch(ChatClient.Builder chatClientBuilder) {
+        this.chatClient = chatClientBuilder.build();
+    }
+
+    public TicketState route(TicketState state) {
+        log.info("LEVEL 2 (technical) - classify_severity");
+        Severity severity = classifySeverity(state);
+        TicketState withSeverity = state.withSeverity(severity);
+
+        return switch (severity) {
+            case CRITICAL -> withSeverity.withRoutingResult(
+                    "On-Call Engineer", "Ticket describes a critical outage.");
+            case NORMAL -> withSeverity.withRoutingResult(
+                    "Standard Technical Queue", "Ticket is technical but not a critical outage.");
+        };
+    }
+
+    private Severity classifySeverity(TicketState state) {
+        try {
+            String word = chatClient.prompt()
+                    .user(u -> u.text(SEVERITY_PROMPT).param("ticketText", state.ticket().ticketText()))
+                    .call()
+                    .content()
+                    .strip()
+                    .toLowerCase(Locale.ROOT);
+            return word.contains("critical") ? Severity.CRITICAL : Severity.NORMAL;
+        } catch (Exception e) {
+            // When unsure, treat as CRITICAL -> gets a human's eyes sooner rather than later.
+            log.error("classify_severity failed, defaulting to critical (safer): {}", e.getMessage());
+            return Severity.CRITICAL;
+        }
+    }
+}
+```
+
+### `pipeline/AccountBranch.java`
+
+The account branch has no level 2 — it routes directly, same as the Python version.
+
+```java
+package com.example.ticketrouting.pipeline;
+
+import com.example.ticketrouting.model.TicketState;
+import org.springframework.stereotype.Component;
+
+@Component
+public class AccountBranch {
+
+    public TicketState route(TicketState state) {
+        return state.withRoutingResult(
+                "Account Team", "Ticket classified as an account-related request.");
+    }
+}
+```
+
+---
+
+## The tree router
+
+### `pipeline/TicketRoutingService.java`
+
+The top-level `switch (category)` is the level-1 conditional edge; each branch then makes its own
+(possibly nested) decision internally.
+
+```java
+package com.example.ticketrouting.pipeline;
+
+import com.example.ticketrouting.model.Ticket;
+import com.example.ticketrouting.model.TicketState;
+import org.springframework.stereotype.Service;
+
+@Service
+public class TicketRoutingService {
+
+    private final CategoryClassificationStep categoryClassificationStep;
+    private final BillingBranch billingBranch;
+    private final TechnicalBranch technicalBranch;
+    private final AccountBranch accountBranch;
+
+    public TicketRoutingService(CategoryClassificationStep categoryClassificationStep,
+                                 BillingBranch billingBranch,
+                                 TechnicalBranch technicalBranch,
+                                 AccountBranch accountBranch) {
+        this.categoryClassificationStep = categoryClassificationStep;
+        this.billingBranch = billingBranch;
+        this.technicalBranch = technicalBranch;
+        this.accountBranch = accountBranch;
+    }
+
+    public TicketState route(Ticket ticket) {
+        TicketState afterClassification = categoryClassificationStep.apply(TicketState.initial(ticket));
+
+        // Level 1 conditional edge: 3-way split by category.
+        // Two of the three branches make their own level-2 decision internally
+        // (BillingBranch and TechnicalBranch each contain their own exhaustive switch),
+        // mirroring the two nested add_conditional_edges calls in the Python graph.
+        return switch (afterClassification.category()) {
+            case BILLING -> billingBranch.route(afterClassification);
+            case TECHNICAL -> technicalBranch.route(afterClassification);
+            case ACCOUNT -> accountBranch.route(afterClassification);
+        };
+    }
+}
+```
+
+---
+
+## Entry points
+
+### `web/TicketRoutingController.java`
+
+```java
+package com.example.ticketrouting.web;
+
+import com.example.ticketrouting.model.Ticket;
+import com.example.ticketrouting.model.TicketState;
+import com.example.ticketrouting.pipeline.TicketRoutingService;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+public class TicketRoutingController {
+
+    private final TicketRoutingService ticketRoutingService;
+
+    public TicketRoutingController(TicketRoutingService ticketRoutingService) {
+        this.ticketRoutingService = ticketRoutingService;
+    }
+
+    @PostMapping("/api/tickets/route")
+    public TicketState route(@RequestBody Ticket ticket) {
+        return ticketRoutingService.route(ticket);
+    }
+}
+```
+
+### `TicketRoutingRunner.java` (CLI demo, mirrors the Python `if __name__ == "__main__"` block)
+
+```java
+package com.example.ticketrouting;
+
+import com.example.ticketrouting.model.Ticket;
+import com.example.ticketrouting.pipeline.TicketRoutingService;
+import org.springframework.boot.CommandLineRunner;
+import org.springframework.context.annotation.Profile;
+import org.springframework.stereotype.Component;
+
+import java.util.List;
+
+@Component
+@Profile("demo")
+public class TicketRoutingRunner implements CommandLineRunner {
+
+    private final TicketRoutingService ticketRoutingService;
+
+    public TicketRoutingRunner(TicketRoutingService ticketRoutingService) {
+        this.ticketRoutingService = ticketRoutingService;
+    }
+
+    @Override
+    public void run(String... args) {
+        List<Ticket> examples = List.of(
+                new Ticket("I was charged twice for my subscription, please refund $45.", 45.0),
+                new Ticket("I need a $1,200 refund, this charge is completely wrong.", 1200.0),
+                new Ticket("The entire site is down and I can't log in at all!", 0.0),
+                new Ticket("The export button is a bit slow sometimes, minor annoyance.", 0.0),
+                new Ticket("I want to upgrade my plan to the enterprise tier.", 0.0)
+        );
+
+        for (Ticket ticket : examples) {
+            var result = ticketRoutingService.route(ticket);
+            var routing = result.routingResult();
+            System.out.printf("-> %s: %s%n", routing.routingDecision(), routing.routingReason());
+        }
+    }
+}
+```
+
+### `TicketRoutingApplication.java`
+
+```java
+package com.example.ticketrouting;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class TicketRoutingApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(TicketRoutingApplication.class, args);
+    }
+}
+```
+
+---
+
+## Running it
+
+```bash
+ollama pull llama3.1:8b
+ollama serve   # if not already running
+
+# CLI demo (prints all 5 example routings, like the Python script)
+mvn spring-boot:run -Dspring-boot.run.profiles=demo
+
+# Or as a service
+mvn spring-boot:run
+curl -X POST localhost:8080/api/tickets/route \
+  -H "Content-Type: application/json" \
+  -d '{"ticketText":"The entire site is down and I cannot log in at all!","disputedAmount":0}'
+```
+
+## Notes on the port
+
+- **Tree of switches, not one switch**: the structural point of this workflow — nested decision
+  points, not just one flat routing table — comes through as one `switch` per level, each living
+  in the component responsible for that level (`TicketRoutingService` for level 1,
+  `BillingBranch`/`TechnicalBranch` for level 2). This keeps each branch's internal decision
+  private to that branch, the same encapsulation the Python version gets from splitting
+  `route_by_refund_amount` and `route_by_severity` into their own functions.
+- **Both safety defaults preserved exactly**: an unclear category defaults to `ACCOUNT` (the
+  least action-triggering outcome), and an unclear severity defaults to `CRITICAL` (the
+  fail-safe-toward-a-human outcome) — same asymmetry as the Python version, kept intentionally
+  rather than "cleaned up" to be symmetric.
+- **Billing branch stays LLM-free**: `BillingBranch.route` is a plain threshold check with no
+  `ChatClient` call, matching the Python `check_refund_amount`'s comment that it needs no LLM.
+- **Versions**: same Ollama-backed `spring-ai-starter-model-ollama` / `llama3.1:8b` setup as the
+  other two branching/parallel ports in this series.
