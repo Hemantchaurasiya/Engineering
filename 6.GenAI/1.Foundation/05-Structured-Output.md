@@ -19,27 +19,27 @@
 2. [Customizing `StructuredOutputValidationAdvisor`](#7-customizing-structuredoutputvalidationadvisor)
 
 **Part C — Provider-native structured output**
-8. [`useProviderStructuredOutput()`](#8-useproviderstructuredoutput)
-9. [How support is detected, supported models, why off by default](#9-how-support-is-detected-supported-models-why-off-by-default)
-10. [Known limitations (schema, Ollama, OpenAI arrays)](#10-known-limitations)
-11. [Enabling globally](#11-enabling-globally)
-12. [Provider built-in JSON mode](#12-provider-built-in-json-mode)
-13. [Combining both switches](#13-combining-both-switches)
+1. [`useProviderStructuredOutput()`](#8-useproviderstructuredoutput)
+2. [How support is detected, supported models, why off by default](#9-how-support-is-detected-supported-models-why-off-by-default)
+3. [Known limitations (schema, Ollama, OpenAI arrays)](#10-known-limitations)
+4. [Enabling globally](#11-enabling-globally)
+5. [Provider built-in JSON mode](#12-provider-built-in-json-mode)
+6. [Combining both switches](#13-combining-both-switches)
 
 **Part D — Output converters**
-14. [`StructuredOutputConverter` API](#14-structuredoutputconverter-api)
-15. [Role of `getJsonSchema()`](#15-role-of-getjsonschema)
-16. [Available converters](#16-available-converters)
-17. [BeanOutputConverter](#17-beanoutputconverter)
-18. [MapOutputConverter](#18-mapoutputconverter)
-19. [ListOutputConverter](#19-listoutputconverter)
-20. [Custom converters (lenient JSON)](#20-custom-converters-lenient-json)
-21. [Non-JSON formats (YAML, CSV)](#21-non-json-formats-yaml-csv)
+1. [`StructuredOutputConverter` API](#14-structuredoutputconverter-api)
+2. [Role of `getJsonSchema()`](#15-role-of-getjsonschema)
+3. [Available converters](#16-available-converters)
+4. [BeanOutputConverter](#17-beanoutputconverter)
+5. [MapOutputConverter](#18-mapoutputconverter)
+6. [ListOutputConverter](#19-listoutputconverter)
+7. [Custom converters (lenient JSON)](#20-custom-converters-lenient-json)
+8. [Non-JSON formats (YAML, CSV)](#21-non-json-formats-yaml-csv)
 
 **Part E — Revision**
-22. [Cheat sheet](#22-cheat-sheet)
-23. [Common mistakes](#23-common-mistakes)
-24. [Interview quick Q&A](#24-interview-quick-qa)
+1. [Cheat sheet](#22-cheat-sheet)
+2. [Common mistakes](#23-common-mistakes)
+3. [Interview quick Q&A](#24-interview-quick-qa)
 
 ---
 
