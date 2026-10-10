@@ -15,8 +15,8 @@
 5. [Reliability switches overview](#5-reliability-switches-overview)
 
 **Part B — Schema validation**
-6. [`validateSchema()` and the self-correcting loop](#6-validateschema-and-the-self-correcting-loop)
-7. [Customizing `StructuredOutputValidationAdvisor`](#7-customizing-structuredoutputvalidationadvisor)
+1. [`validateSchema()` and the self-correcting loop](#6-validateschema-and-the-self-correcting-loop)
+2. [Customizing `StructuredOutputValidationAdvisor`](#7-customizing-structuredoutputvalidationadvisor)
 
 **Part C — Provider-native structured output**
 8. [`useProviderStructuredOutput()`](#8-useproviderstructuredoutput)
